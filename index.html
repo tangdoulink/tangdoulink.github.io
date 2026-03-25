@@ -274,8 +274,11 @@
         const MSG_TYPES = {
             0x0001: "终端通用应答", 0x8001: "平台通用应答", 0x0002: "终端心跳",
             0x0003: "终端注销", 0x0100: "终端注册", 0x8100: "终端注册应答",
-            0x0102: "终端鉴权", 0x0104: "查询终端参数应答", 0x8104: "查询终端参数",
-            0x0200: "位置信息汇报", 0x0201: "位置信息查询应答", 
+            0x0102: "终端鉴权", 0x0104: "查询终端参数应答", 0x8103: "设置终端参数",
+            0x8104: "查询终端参数", 0x8105: "终端控制", 0x8106: "查询指定终端参数",
+            0x0200: "位置信息汇报", 0x0201: "位置信息查询应答",
+            0x8201: "位置信息查询", 0x8202: "临时位置跟踪控制",
+            0x8003: "补传分包请求",
             0x0900: "数据上行透传", 0x8900: "数据下行透传",
             0x0A00: "终端RSA公钥", 0x8A00: "平台RSA公钥"
         };
@@ -308,14 +311,28 @@
             0x0201: "学员登录",
             0x0202: "学员登出",
             0x0203: "学时上报",
+            0x0205: "命令学时上传应答",
+            0x0301: "立即拍照命令应答",
+            0x0302: "照片查询命令应答",
+            0x0303: "照片查询结果",
+            0x0304: "上传指定照片命令应答",
             0x0305: "照片上传初始化",
             0x0306: "照片上传分包",
+            0x0501: "设置培训参数应答",
+            0x0502: "设置禁训状态应答",
             0x8001: "扩展通用应答",
             0x8101: "教练员登录应答",
             0x8102: "教练员登出应答",
             0x8201: "学员登录应答",
             0x8202: "学员登出应答",
-            0x8305: "照片上传初始化应答"
+            0x8205: "命令学时上传",
+            0x8301: "立即拍照命令",
+            0x8302: "照片查询命令",
+            0x8303: "照片查询结果确认",
+            0x8304: "上传指定照片命令",
+            0x8305: "照片上传初始化应答",
+            0x8501: "设置培训参数",
+            0x8502: "设置禁训状态"
         };
 
         const EXAMPLES = {
@@ -364,6 +381,36 @@
             return bytes;
         }
 
+        /**
+         * JT1302 转义解码：去掉首尾 0x7E 后，对中间数据进行反转义
+         * 0x7D 0x01 → 0x7D
+         * 0x7D 0x02 → 0x7E
+         */
+        function unescapePacket(bytes) {
+            if (bytes.length < 2 || bytes[0] !== 0x7e || bytes[bytes.length - 1] !== 0x7e) {
+                return bytes;
+            }
+            const inner = bytes.slice(1, bytes.length - 1);
+            const result = [0x7e];
+            for (let i = 0; i < inner.length; i++) {
+                if (inner[i] === 0x7d && i + 1 < inner.length) {
+                    if (inner[i + 1] === 0x01) {
+                        result.push(0x7d);
+                        i++;
+                    } else if (inner[i + 1] === 0x02) {
+                        result.push(0x7e);
+                        i++;
+                    } else {
+                        result.push(inner[i]);
+                    }
+                } else {
+                    result.push(inner[i]);
+                }
+            }
+            result.push(0x7e);
+            return result;
+        }
+
         function bcdToString(bytes) {
             return bytes.map(b => ((b >> 4) & 0x0F).toString() + (b & 0x0F).toString()).join('');
         }
@@ -399,10 +446,13 @@
             try {
                 if (!input) throw new Error("请输入报文数据");
                 
-                const bytes = hexToBytes(input);
-                
-                if (bytes.length < 20) throw new Error(`报文长度不足(最小20字节，当前${bytes.length}字节)`);
-                if (bytes[0] !== 0x7e || bytes[bytes.length - 1] !== 0x7e) throw new Error("标识位错误");
+                const rawBytes = hexToBytes(input);
+
+                if (rawBytes.length < 20) throw new Error(`报文长度不足(最小20字节，当前${rawBytes.length}字节)`);
+                if (rawBytes[0] !== 0x7e || rawBytes[rawBytes.length - 1] !== 0x7e) throw new Error("标识位错误");
+
+                // 转义解码
+                const bytes = unescapePacket(rawBytes);
 
                 let idx = 0;
                 const packet = {
@@ -469,8 +519,12 @@
                 renderPassthrough(packet); // 透传专用面板
                 renderCRC(calcCRC, packet.crc, crcValid);
                 
+                const escaped = rawBytes.length !== bytes.length;
                 document.getElementById('rawHex').textContent = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
-                document.getElementById('byteCount').textContent = `共 ${bytes.length} 字节${packet.isPassthrough ? ' [透传消息]' : ''}`;
+                let countText = `共 ${bytes.length} 字节`;
+                if (escaped) countText += ` (转义前 ${rawBytes.length} 字节)`;
+                if (packet.isPassthrough) countText += ' [透传消息]';
+                document.getElementById('byteCount').textContent = countText;
                 document.getElementById('resultContainer').classList.remove('hidden');
                 errorDisplay.classList.add('hidden');
 
@@ -607,6 +661,22 @@
                     }
                     break;
                 }
+                case 0x0102: {
+                    // 教练员登出: 教练编号(16) + 登出时间(BCD[6]) + 累计时长(WORD) + 累计里程(WORD)
+                    if (len >= 26) {
+                        push("教练编号", readAscii(data, 0, 16));
+                        push("登出时间(BCD)", readBcd(data, 16, 6));
+                        push("累计时长(分钟)", readU16(data, 22));
+                        push("累计里程(0.1km)", readU16(data, 24));
+                        if (len > 26) push("附加数据(hex)", bytesToHex(data.slice(26)));
+                    } else if (len >= 16) {
+                        push("教练编号", readAscii(data, 0, 16));
+                        if (len > 16) push("附加数据(hex)", bytesToHex(data.slice(16)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
                 case 0x0201: {
                     if (len >= 41) {
                         push("学员编号", readAscii(data, 0, 16));
@@ -627,6 +697,20 @@
                         push("累计里程(0.1km)", readU16(data, 24));
                         push("课堂ID", readU32(data, 26));
                         if (len > 30) push("附加数据(hex)", bytesToHex(data.slice(30)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0203: {
+                    // 学时上报: recordId(26) + reportType(1) + studentId(16) + coachId(16) + classroomId(4) + ...
+                    if (len >= 59) {
+                        push("记录ID", readAscii(data, 0, 26));
+                        push("上报类型", `0x${toHex(data[26], 2)}`);
+                        push("学员编号", readAscii(data, 27, 16));
+                        push("教练编号", readAscii(data, 43, 16));
+                        push("课堂ID", readU32(data, 59));
+                        if (len > 63) push("附加数据(hex)", bytesToHex(data.slice(63)));
                     } else {
                         push("原始数据", hx);
                     }
@@ -859,7 +943,7 @@
                     </div>
                     <div class="bg-slate-800/50 p-1.5 rounded flex justify-between">
                         <span class="text-slate-400">版本:</span>
-                        <span class="text-orange-400">${ver?'2011':'2019'}</span>
+                        <span class="text-orange-400">${ver?'2019':'2011'}</span>
                     </div>
                 </div>
             `;
@@ -917,7 +1001,7 @@
                         <div class="border-t border-slate-700/30 pt-1 mt-1 space-y-1">
                             <div class="flex justify-between"><span class="text-slate-400">应答流水:</span><span class="mono text-white">${respSeq}</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">结果:</span><span class="${result===0?'text-emerald-400':'text-red-400'} font-bold">${results[result]||'未知'}</span></div>
-                            ${pkt.body.length>3?`<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><div class="text-slate-500 text-xs">鉴权码:</div><div class="mono text-emerald-400 text-xs break-all">${String.fromCharCode(...pkt.body.slice(4))}</div></div>`:''}
+                            ${pkt.body.length>3?`<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><div class="text-slate-500 text-xs">鉴权码:</div><div class="mono text-emerald-400 text-xs break-all">${String.fromCharCode(...pkt.body.slice(3))}</div></div>`:''}
                         </div>
                     `;
                 }
