@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JTT1302 协议报文解析器 - 计时扩展修正版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            color: #e2e8f0;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        .packet-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.75rem;
+        }
+        .packet-table th {
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            padding: 8px 4px;
+            text-align: center;
+            font-weight: 600;
+            color: #60a5fa;
+        }
+        .packet-table td {
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            padding: 6px 4px;
+            text-align: center;
+            vertical-align: middle;
+        }
+        .byte-cell {
+            background: rgba(30, 41, 59, 0.5);
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+        .field-header { background: rgba(59, 130, 246, 0.3); color: #93c5fd; }
+        .field-version { background: rgba(16, 185, 129, 0.3); color: #6ee7b7; }
+        .field-id { background: rgba(139, 92, 246, 0.3); color: #c4b5fd; }
+        .field-id-passthrough { background: rgba(234, 179, 8, 0.3); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.5); }
+        .field-attr { background: rgba(245, 158, 11, 0.3); color: #fcd34d; }
+        .field-phone { background: rgba(236, 72, 153, 0.3); color: #f9a8d4; }
+        .field-seq { background: rgba(6, 182, 212, 0.3); color: #67e8f9; }
+        .field-reserve { background: rgba(107, 114, 128, 0.3); color: #d1d5db; }
+        .field-sub { background: rgba(249, 115, 22, 0.3); color: #fdba74; }
+        .field-body { background: rgba(99, 102, 241, 0.3); color: #a5b4fc; }
+        .field-crc { background: rgba(239, 68, 68, 0.3); color: #fca5a5; }
+        
+        .parse-btn {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .parse-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+        
+        .detail-panel {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 8px;
+            font-size: 0.8rem;
+        }
+        
+        .bit-row {
+            display: flex;
+            justify-content: center;
+            gap: 2px;
+            margin: 2px 0;
+            font-size: 0.7rem;
+        }
+        .bit {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .bit-1 { background: #22c55e; color: white; }
+        .bit-0 { background: #374151; color: #6b7280; }
+        .bit-label { background: #1e40af; color: #93c5fd; font-size: 0.6rem; }
+        
+        .structure-diagram {
+            display: flex;
+            align-items: stretch;
+            gap: 2px;
+            margin: 8px 0;
+            font-size: 0.7rem;
+            overflow-x: auto;
+        }
+        .struct-block {
+            padding: 4px 2px;
+            text-align: center;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 30px;
+        }
+        .struct-label { font-size: 0.6rem; opacity: 0.8; margin-top: 2px; }
+        
+        .example-btn {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .example-btn:hover {
+            transform: translateY(-1px);
+        }
+        
+        .passthrough-panel {
+            background: rgba(234, 179, 8, 0.1);
+            border: 1px solid rgba(234, 179, 8, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 8px;
+        }
+        
+        .sub-packet-type {
+            display: inline-block;
+            background: rgba(99, 102, 241, 0.3);
+            color: #a5b4fc;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin-left: 4px;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+
+    <div class="max-w-[1500px] mx-auto">
+        <header class="mb-4 text-center">
+            <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent mb-1">
+                JTT1302 协议报文解析器
+            </h1>
+            <p class="text-slate-400 text-xs">支持透传消息(0x8900/0x0900)中的计时扩展子协议</p>
+        </header>
+
+        <div class="glass-panel rounded-xl p-3 mb-4">
+            <div class="flex flex-col md:flex-row gap-2">
+                <input type="text" id="packetInput" 
+                    class="flex-1 bg-slate-800/50 border border-slate-600 rounded-lg px-3 py-2 mono text-sm focus:outline-none focus:border-blue-500 text-slate-200"
+                    placeholder="输入十六进制报文..."
+                    value="7e 89 00 00 1a 05 01 38 61 98 93 55 00 01 00 13 01 01 23 45 67 89 01 23 45 67 89 01 01 24 10 10 30 00 00 3c 7e">
+                <div class="flex gap-2">
+                    <button id="parseBtn" class="parse-btn text-white px-4 py-2 rounded-lg font-semibold text-sm">
+                        解析报文
+                    </button>
+                    <button id="clearBtn" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors">
+                        清空
+                    </button>
+                </div>
+            </div>
+            
+            <div class="mt-2 flex flex-wrap gap-1 text-xs">
+                <span class="text-slate-500 py-1">标准示例:</span>
+                <button class="example-btn bg-blue-900/30 hover:bg-blue-900/50 text-blue-300 px-2 py-1 rounded border border-blue-800/30" data-example="register">终端注册响应</button>
+                <button class="example-btn bg-purple-900/30 hover:bg-purple-900/50 text-purple-300 px-2 py-1 rounded border border-purple-800/30" data-example="auth">终端鉴权</button>
+                <button class="example-btn bg-green-900/30 hover:bg-green-900/50 text-green-300 px-2 py-1 rounded border border-green-800/30" data-example="heartbeat">心跳包</button>
+                
+                <span class="text-slate-500 py-1 ml-2">透传示例:</span>
+                <button class="example-btn bg-yellow-900/30 hover:bg-yellow-900/50 text-yellow-300 px-2 py-1 rounded border border-yellow-800/30" data-example="passthroughTimeStart">计时开始(透传)</button>
+                <button class="example-btn bg-orange-900/30 hover:bg-orange-900/50 text-orange-300 px-2 py-1 rounded border border-orange-800/30" data-example="passthroughTimeEnd">计时结束(透传)</button>
+                <button class="example-btn bg-pink-900/30 hover:bg-pink-900/50 text-pink-300 px-2 py-1 rounded border border-pink-800/30" data-example="passthroughCoachLogin">教练员登录</button>
+            </div>
+        </div>
+
+        <div id="errorDisplay" class="hidden bg-red-500/10 border border-red-500/50 rounded-lg p-2 mb-3 text-red-400 text-xs"></div>
+
+        <div id="resultContainer" class="hidden glass-panel rounded-xl p-3 overflow-x-auto">
+            
+            <div class="mb-3">
+                <div class="text-xs text-slate-400 mb-1">报文结构示意图</div>
+                <div class="structure-diagram" id="structureDiagram"></div>
+            </div>
+
+            <table class="packet-table mb-3">
+                <thead>
+                    <tr>
+                        <th class="w-10">标识<br>(1)</th>
+                        <th class="w-12">版本<br>(1)</th>
+                        <th class="w-16">消息ID<br>(2)</th>
+                        <th class="w-16">属性<br>(2)</th>
+                        <th class="w-28">手机号<br>(8)</th>
+                        <th class="w-14">流水号<br>(2)</th>
+                        <th class="w-12">预留<br>(1)</th>
+                        <th class="w-20">[分包项]<br>(4/无)</th>
+                        <th>消息体<br>(N)</th>
+                        <th class="w-10">校验<br>(1)</th>
+                        <th class="w-10">标识<br>(1)</th>
+                    </tr>
+                </thead>
+                <tbody id="mainTableBody"></tbody>
+            </table>
+
+            <!-- 透传消息专用解析面板 -->
+            <div id="passthroughPanel" class="hidden passthrough-panel mb-3">
+                <h3 class="text-yellow-400 font-bold mb-2 text-xs uppercase flex items-center gap-2">
+                    <span>透传消息解析</span>
+                    <span class="sub-packet-type" id="passthroughType"></span>
+                </h3>
+                <div id="passthroughContent" class="space-y-1 text-xs"></div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-3">
+                <div class="detail-panel">
+                    <h3 class="text-blue-400 font-bold mb-2 text-xs uppercase border-b border-blue-800/30 pb-1">基础信息</h3>
+                    <div id="basicInfo" class="space-y-1 text-xs"></div>
+                </div>
+
+                <div class="detail-panel">
+                    <h3 class="text-slate-400 font-bold mb-2 text-xs uppercase border-b border-slate-700/30 pb-1">预留字节</h3>
+                    <div id="reserveInfo" class="space-y-1 text-xs"></div>
+                </div>
+
+                <div class="detail-panel">
+                    <h3 class="text-amber-400 font-bold mb-2 text-xs uppercase border-b border-amber-800/30 pb-1">消息体属性</h3>
+                    <div id="attrBits" class="space-y-1"></div>
+                </div>
+
+                <div class="detail-panel">
+                    <h3 class="text-indigo-400 font-bold mb-2 text-xs uppercase border-b border-indigo-800/30 pb-1">消息体解析</h3>
+                    <div id="bodyParse" class="space-y-1 text-xs"></div>
+                </div>
+            </div>
+
+            <div class="mt-3 p-2 bg-slate-900/50 rounded border border-slate-700">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs text-slate-500">校验验证 (XOR)</span>
+                    <span id="crcStatus" class="text-xs font-bold"></span>
+                </div>
+                <div class="grid grid-cols-3 gap-2 text-xs mono">
+                    <div class="bg-slate-800/50 p-2 rounded text-center">
+                        <div class="text-slate-500">计算值</div>
+                        <div id="calcCrc" class="text-emerald-400 font-bold"></div>
+                    </div>
+                    <div class="bg-slate-800/50 p-2 rounded text-center">
+                        <div class="text-slate-500">报文值</div>
+                        <div id="pktCrc" class="text-blue-400 font-bold"></div>
+                    </div>
+                    <div class="bg-slate-800/50 p-2 rounded text-center">
+                        <div class="text-slate-500">结果</div>
+                        <div id="crcResult"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 p-2 bg-slate-900/30 rounded border border-slate-700/50">
+                <div class="flex justify-between text-xs text-slate-500 mb-1">
+                    <span>原始数据</span>
+                    <span id="byteCount"></span>
+                </div>
+                <div id="rawHex" class="mono text-xs break-all text-slate-400"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 标准消息类型 (JTT808/JTT1302 基础)
+        const MSG_TYPES = {
+            0x0001: "终端通用应答", 0x8001: "平台通用应答", 0x0002: "终端心跳",
+            0x0003: "终端注销", 0x0100: "终端注册", 0x8100: "终端注册应答",
+            0x0102: "终端鉴权", 0x0104: "查询终端参数应答", 0x8103: "设置终端参数",
+            0x8104: "查询终端参数", 0x8105: "终端控制", 0x8106: "查询指定终端参数",
+            0x0200: "位置信息汇报", 0x0201: "位置信息查询应答",
+            0x8201: "位置信息查询", 0x8202: "临时位置跟踪控制",
+            0x8003: "补传分包请求",
+            0x0900: "数据上行透传", 0x8900: "数据下行透传",
+            0x0A00: "终端RSA公钥", 0x8A00: "平台RSA公钥"
+        };
+
+        // 透传消息类型
+        // 透传消息体格式: [透传消息类型(1)] + [透传消息内容(N)]
+        const PASSTHROUGH_TYPES = {
+            0x00: "GNSS模块详细定位数据",
+            0x0B: "道路运输证IC卡信息", 
+            0x41: "串口1透传",
+            0x42: "串口2透传",
+            0x13: "扩展计时培训消息(B.33)",
+            0xF0: "计时终端应用",
+            0xF1: "计时终端应用扩展",
+            0xF2: "计时终端应用扩展2",
+            0xF3: "计时终端应用扩展3",
+            0xF4: "计时终端应用扩展4",
+            0xF5: "计时终端应用扩展5",
+            0xF6: "计时终端应用扩展6",
+            0xF7: "计时终端应用扩展7",
+            0xF8: "计时终端应用扩展8",
+            0xF9: "计时终端应用扩展9",
+            0xFA: "计时终端应用扩展A"
+        };
+
+        // B.33 扩展计时培训消息ID
+        const EXT_MSG_TYPES = {
+            0x0101: "教练员登录",
+            0x0102: "教练员登出",
+            0x0201: "学员登录",
+            0x0202: "学员登出",
+            0x0203: "学时上报",
+            0x0205: "命令学时上传应答",
+            0x0301: "立即拍照命令应答",
+            0x0302: "照片查询命令应答",
+            0x0303: "照片查询结果",
+            0x0304: "上传指定照片命令应答",
+            0x0305: "照片上传初始化",
+            0x0306: "照片上传分包",
+            0x0501: "设置培训参数应答",
+            0x0502: "设置禁训状态应答",
+            0x8001: "扩展通用应答",
+            0x8101: "教练员登录应答",
+            0x8102: "教练员登出应答",
+            0x8201: "学员登录应答",
+            0x8202: "学员登出应答",
+            0x8205: "命令学时上传",
+            0x8301: "立即拍照命令",
+            0x8302: "照片查询命令",
+            0x8303: "照片查询结果确认",
+            0x8304: "上传指定照片命令",
+            0x8305: "照片上传初始化应答",
+            0x8501: "设置培训参数",
+            0x8502: "设置禁训状态"
+        };
+
+        const EXAMPLES = {
+            register: "7e 80 80 01 00 05 00 00 05 76 61 98 93 55 02 4d 00 02 4d 01 02 00 4b 7e",
+            auth: "7e 01 02 00 0c 05 01 38 61 98 93 55 00 01 00 31 32 33 34 35 36 37 38 39 30 7e",
+            heartbeat: "7e 00 02 00 00 05 01 38 61 98 93 55 00 0a 00 7e",
+            
+            // 透传消息示例: 传输类型0x13 + 扩展计时培训消息(B.33)
+            passthroughTimeStart: "7e808900002000000576619893550001001380010000000154303030303030303030303030303031000000050001010100967e",
+            passthroughTimeEnd: "7e8089000025000005766198935500020013810100000002543030303030303030303030303030310000000a000201434f4143480000d97e",
+            passthroughCoachLogin: "7e80090000400000057661989355000300130101000000035430303030303030303030303030303100000025434f4143483030303030303030303030313433303030303030303030303030303030304331e47e"
+        };
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('parseBtn').addEventListener('click', parsePacket);
+            document.getElementById('clearBtn').addEventListener('click', clearAll);
+            
+            document.querySelectorAll('.example-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const type = this.getAttribute('data-example');
+                    document.getElementById('packetInput').value = EXAMPLES[type];
+                    parsePacket();
+                });
+            });
+            
+            document.getElementById('packetInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') parsePacket();
+            });
+            
+            if (document.getElementById('packetInput').value.trim()) parsePacket();
+        });
+
+        function clearAll() {
+            document.getElementById('packetInput').value = '';
+            document.getElementById('resultContainer').classList.add('hidden');
+            document.getElementById('errorDisplay').classList.add('hidden');
+        }
+
+        function hexToBytes(hex) {
+            hex = hex.replace(/\s+/g, '');
+            if (hex.length % 2 !== 0) throw new Error("十六进制长度错误");
+            const bytes = [];
+            for (let i = 0; i < hex.length; i += 2) {
+                bytes.push(parseInt(hex.substr(i, 2), 16));
+            }
+            return bytes;
+        }
+
+        /**
+         * JT1302 转义解码：去掉首尾 0x7E 后，对中间数据进行反转义
+         * 0x7D 0x01 → 0x7D
+         * 0x7D 0x02 → 0x7E
+         */
+        function unescapePacket(bytes) {
+            if (bytes.length < 2 || bytes[0] !== 0x7e || bytes[bytes.length - 1] !== 0x7e) {
+                return bytes;
+            }
+            const inner = bytes.slice(1, bytes.length - 1);
+            const result = [0x7e];
+            for (let i = 0; i < inner.length; i++) {
+                if (inner[i] === 0x7d && i + 1 < inner.length) {
+                    if (inner[i + 1] === 0x01) {
+                        result.push(0x7d);
+                        i++;
+                    } else if (inner[i + 1] === 0x02) {
+                        result.push(0x7e);
+                        i++;
+                    } else {
+                        result.push(inner[i]);
+                    }
+                } else {
+                    result.push(inner[i]);
+                }
+            }
+            result.push(0x7e);
+            return result;
+        }
+
+        function bcdToString(bytes) {
+            return bytes.map(b => ((b >> 4) & 0x0F).toString() + (b & 0x0F).toString()).join('');
+        }
+
+        function parseBCDTime(bytes) {
+            if (bytes.length !== 6) return "无效时间";
+            const str = bcdToString(bytes);
+            return `20${str.substr(0,2)}-${str.substr(2,2)}-${str.substr(4,2)} ${str.substr(6,2)}:${str.substr(8,2)}:${str.substr(10,2)}`;
+        }
+
+        function parseGPS(bytes) {
+            if (bytes.length < 10) return "无效GPS";
+            const lat = (((bytes[0]<<24)|(bytes[1]<<16)|(bytes[2]<<8)|bytes[3])>>>0)/1000000;
+            const lon = (((bytes[4]<<24)|(bytes[5]<<16)|(bytes[6]<<8)|bytes[7])>>>0)/1000000;
+            const alt = (bytes[8]<<8)|bytes[9];
+            return `${lat.toFixed(6)},${lon.toFixed(6)},${alt}m`;
+        }
+
+        function calculateCRC(bytes) {
+            let crc = 0;
+            for (let i = 1; i < bytes.length - 2; i++) crc ^= bytes[i];
+            return crc;
+        }
+
+        function isPassthroughMsg(msgId) {
+            return msgId === 0x0900 || msgId === 0x8900;
+        }
+
+        function parsePacket() {
+            const input = document.getElementById('packetInput').value.trim();
+            const errorDisplay = document.getElementById('errorDisplay');
+            
+            try {
+                if (!input) throw new Error("请输入报文数据");
+                
+                const rawBytes = hexToBytes(input);
+
+                if (rawBytes.length < 20) throw new Error(`报文长度不足(最小20字节，当前${rawBytes.length}字节)`);
+                if (rawBytes[0] !== 0x7e || rawBytes[rawBytes.length - 1] !== 0x7e) throw new Error("标识位错误");
+
+                // 转义解码
+                const bytes = unescapePacket(rawBytes);
+
+                let idx = 0;
+                const packet = {
+                    header: bytes[idx++],
+                    version: bytes[idx++],
+                    msgId: (bytes[idx] << 8) | bytes[idx+1]
+                };
+                idx += 2;
+                
+                packet.msgAttr = (bytes[idx] << 8) | bytes[idx+1];
+                idx += 2;
+                
+                packet.phone = bytes.slice(idx, idx+8);
+                idx += 8;
+                
+                packet.seq = (bytes[idx] << 8) | bytes[idx+1];
+                idx += 2;
+                
+                packet.reserve = bytes[idx++];
+                
+                const bodyLen = packet.msgAttr & 0x03FF;
+                const encrypt = (packet.msgAttr >> 10) & 0x07;
+                const hasSubPacket = ((packet.msgAttr >> 13) & 0x01) === 1;
+                const versionFlag = (packet.msgAttr >> 14) & 0x01;
+                const reserved = (packet.msgAttr >> 15) & 0x01;
+
+                packet.hasSubPacket = hasSubPacket;
+                packet.isPassthrough = isPassthroughMsg(packet.msgId);
+                
+                if (hasSubPacket) {
+                    if (bytes.length < idx + 4) throw new Error("分包标记为1但数据不足");
+                    packet.subPacketInfo = bytes.slice(idx, idx+4);
+                    idx += 4;
+                }
+
+                const remaining = bytes.length - idx - 2;
+                if (remaining < 0) throw new Error("报文结构错误");
+                
+                packet.body = bytes.slice(idx, idx + remaining);
+                idx += remaining;
+                
+                packet.crc = bytes[idx++];
+                packet.footer = bytes[idx++];
+
+                // 解析透传内容
+                packet.passthrough = null;
+                if (packet.isPassthrough && packet.body.length > 0) {
+                    packet.passthrough = parsePassthrough(packet.body);
+                }
+
+                if (packet.body.length !== bodyLen) {
+                    console.warn(`长度不匹配: 声明${bodyLen}, 实际${packet.body.length}`);
+                }
+
+                const calcCRC = calculateCRC(bytes);
+                const crcValid = calcCRC === packet.crc;
+
+                renderStructureDiagram(packet);
+                renderMainTable(packet, bodyLen);
+                renderBasicInfo(packet);
+                renderReserveInfo(packet);
+                renderAttrBits(packet.msgAttr, bodyLen, encrypt, hasSubPacket, reserved, versionFlag);
+                renderBodyParse(packet);
+                renderPassthrough(packet); // 透传专用面板
+                renderCRC(calcCRC, packet.crc, crcValid);
+                
+                const escaped = rawBytes.length !== bytes.length;
+                document.getElementById('rawHex').textContent = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+                let countText = `共 ${bytes.length} 字节`;
+                if (escaped) countText += ` (转义前 ${rawBytes.length} 字节)`;
+                if (packet.isPassthrough) countText += ' [透传消息]';
+                document.getElementById('byteCount').textContent = countText;
+                document.getElementById('resultContainer').classList.remove('hidden');
+                errorDisplay.classList.add('hidden');
+
+            } catch (err) {
+                errorDisplay.textContent = "解析错误: " + err.message;
+                errorDisplay.classList.remove('hidden');
+                document.getElementById('resultContainer').classList.add('hidden');
+                console.error(err);
+            }
+        }
+
+        function parsePassthrough(body) {
+            if (body.length < 1) return null;
+            
+            const type = body[0];
+            const content = body.slice(1);
+            
+            let result = {
+                type: type,
+                typeName: PASSTHROUGH_TYPES[type] || `未知透传类型(0x${type.toString(16).padStart(2,'0')})`,
+                content: content,
+                extension: null
+            };
+            
+            // 0x13 承载扩展计时培训消息（B.33）
+            if (type === 0x13 && content.length > 0) {
+                result.extension = parseExtensionTraining(content);
+            }
+            
+            return result;
+        }
+
+        function parseExtensionTraining(content) {
+            const ext = {
+                msgId: null,
+                msgName: "",
+                msgProps: null,
+                serialNo: null,
+                terminalId: "",
+                dataLength: 0,
+                data: [],
+                dataParsed: [],
+                tail: [],
+                error: null
+            };
+            if (content.length < 26) {
+                ext.error = `扩展头长度不足，至少26字节，当前${content.length}`;
+                return ext;
+            }
+            ext.msgId = readU16(content, 0);
+            ext.msgName = EXT_MSG_TYPES[ext.msgId] || `未知扩展消息(0x${toHex(ext.msgId,4)})`;
+            ext.msgProps = readU16(content, 2);
+            ext.serialNo = readU16(content, 4);
+            ext.terminalId = readAscii(content, 6, 16);
+            ext.dataLength = readU32(content, 22);
+            const payload = content.slice(26);
+            const actualLen = Math.min(ext.dataLength, payload.length);
+            ext.data = payload.slice(0, actualLen);
+            ext.tail = payload.slice(actualLen);
+            ext.dataParsed = parseExtensionData(ext.msgId, ext.data);
+            if (ext.dataLength > payload.length) {
+                ext.error = `声明dataLength=${ext.dataLength}，实际仅${payload.length}`;
+            }
+            return ext;
+        }
+
+        function parseExtensionData(msgId, data) {
+            const out = [];
+            const push = (name, val) => out.push({name, val});
+            const len = data.length;
+            const hx = bytesToHex(data);
+            switch (msgId) {
+                case 0x8001: {
+                    if (len >= 3) {
+                        push("应答消息ID", `0x${toHex(readU16(data, 0), 4)}`);
+                        push("应答结果", `0x${toHex(data[2], 2)}`);
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x8101: {
+                    if (len >= 19) {
+                        push("结果码", `0x${toHex(data[0], 2)}`);
+                        push("教练编号", readAscii(data, 1, 16));
+                        push("附加播报标志", `0x${toHex(data[17], 2)}`);
+                        const bLen = data[18] || 0;
+                        push("播报长度", bLen);
+                        if (bLen > 0 && len >= 19 + bLen) {
+                            push("播报内容", readAscii(data, 19, bLen));
+                        }
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x8201: {
+                    if (len >= 23) {
+                        push("结果码", `0x${toHex(data[0], 2)}`);
+                        push("总学时(分钟)", readU32(data, 1));
+                        push("有效学时(分钟)", readU32(data, 5));
+                        push("科目二有效学时(分钟)", readU32(data, 9));
+                        push("科目三有效学时(分钟)", readU32(data, 13));
+                        push("总里程(0.1km)", readU16(data, 17));
+                        push("有效里程(0.1km)", readU16(data, 19));
+                        push("附加播报标志", `0x${toHex(data[21], 2)}`);
+                        const bLen = data[22] || 0;
+                        push("播报长度", bLen);
+                        if (bLen > 0 && len >= 23 + bLen) {
+                            push("播报内容", readAscii(data, 23, bLen));
+                        }
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x8102:
+                case 0x8202: {
+                    if (len >= 1) {
+                        push("结果码", `0x${toHex(data[0], 2)}`);
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0101: {
+                    if (len >= 36) {
+                        push("教练编号", readAscii(data, 0, 16));
+                        push("身份证号", readAscii(data, 16, 18));
+                        push("准教车型", readAscii(data, 34, 2));
+                        // GNSS 数据 (28字节)
+                        if (len >= 64) {
+                            push("─ GNSS数据 ─", "───────────────");
+                            const gnss = data.slice(36, 64);
+                            push("报警标志", `0x${bytesToHex(gnss.slice(0, 4))}`);
+                            push("状态位", `0x${bytesToHex(gnss.slice(4, 8))}`);
+                            const lat = (readU32(gnss, 8) / 1000000).toFixed(6);
+                            const lon = (readU32(gnss, 12) / 1000000).toFixed(6);
+                            push("纬度", `${lat}°`);
+                            push("经度", `${lon}°`);
+                            push("高程", `${(gnss[16] << 8) | gnss[17]} m`);
+                            push("速度", `${(gnss[18] << 8) | gnss[19]} km/h`);
+                            push("方向", `${(gnss[20] << 8) | gnss[21]}°`);
+                            push("GNSS时间", parseBCDTime(gnss.slice(22, 28)));
+                        }
+                        if (len > 64) push("附加数据(hex)", bytesToHex(data.slice(64)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0102: {
+                    // 教练员登出: 教练编号(16) + 登出时间(BCD[6]) + 累计时长(WORD) + 累计里程(WORD)
+                    if (len >= 26) {
+                        push("教练编号", readAscii(data, 0, 16));
+                        push("登出时间(BCD)", readBcd(data, 16, 6));
+                        push("累计时长(分钟)", readU16(data, 22));
+                        push("累计里程(0.1km)", readU16(data, 24));
+                        if (len > 26) push("附加数据(hex)", bytesToHex(data.slice(26)));
+                    } else if (len >= 16) {
+                        push("教练编号", readAscii(data, 0, 16));
+                        if (len > 16) push("附加数据(hex)", bytesToHex(data.slice(16)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0201: {
+                    if (len >= 41) {
+                        push("学员编号", readAscii(data, 0, 16));
+                        push("当前教练编号", readAscii(data, 16, 16));
+                        push("课程编码(BCD)", readBcd(data, 32, 5));
+                        push("课堂ID", readU32(data, 37));
+                        if (len > 41) push("附加数据(hex)", bytesToHex(data.slice(41)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0202: {
+                    if (len >= 30) {
+                        push("学员编号", readAscii(data, 0, 16));
+                        push("登出时间(BCD)", readBcd(data, 16, 6));
+                        push("累计时长(分钟)", readU16(data, 22));
+                        push("累计里程(0.1km)", readU16(data, 24));
+                        push("课堂ID", readU32(data, 26));
+                        if (len > 30) push("附加数据(hex)", bytesToHex(data.slice(30)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0203: {
+                    // 学时上报: recordId(26) + reportType(1) + studentId(16) + coachId(16) + classroomId(4) + ...
+                    if (len >= 59) {
+                        push("记录ID", readAscii(data, 0, 26));
+                        push("上报类型", `0x${toHex(data[26], 2)}`);
+                        push("学员编号", readAscii(data, 27, 16));
+                        push("教练编号", readAscii(data, 43, 16));
+                        push("课堂ID", readU32(data, 59));
+                        if (len > 63) push("附加数据(hex)", bytesToHex(data.slice(63)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0305: {
+                    if (len >= 39) {
+                        push("照片编号", readAscii(data, 0, 10));
+                        push("人员编号", readAscii(data, 10, 16));
+                        push("上传模式", `0x${toHex(data[26], 2)}`);
+                        push("摄像通道", data[27]);
+                        push("图像尺寸", data[28]);
+                        push("事件类型", `0x${toHex(data[29], 2)}`);
+                        push("总包数", readU16(data, 30));
+                        push("照片总字节数", readU32(data, 32));
+                        push("课堂ID", readU32(data, 36));
+                        if (len > 40) push("附加数据(hex)", bytesToHex(data.slice(40)));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                case 0x0306: {
+                    if (len >= 10) {
+                        push("照片编号", readAscii(data, 0, 10));
+                        push("照片数据字节数", len - 10);
+                        if (len > 10) push("照片数据(hex前64)", bytesToHex(data.slice(10, 42)) + (len > 42 ? "..." : ""));
+                    } else {
+                        push("原始数据", hx);
+                    }
+                    break;
+                }
+                default:
+                    push("原始数据", hx);
+                    break;
+            }
+            return out;
+        }
+
+        function readU16(bytes, offset) {
+            if (offset + 1 >= bytes.length) return 0;
+            return ((bytes[offset] << 8) | bytes[offset + 1]) >>> 0;
+        }
+
+        function readU32(bytes, offset) {
+            if (offset + 3 >= bytes.length) return 0;
+            return (((bytes[offset] << 24) >>> 0) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+        }
+
+        function readAscii(bytes, offset, len) {
+            return String.fromCharCode(...bytes.slice(offset, offset + len)).replace(/\0+$/g, '').trim();
+        }
+
+        function readBcd(bytes, offset, len) {
+            return bcdToString(bytes.slice(offset, offset + len));
+        }
+
+        function bytesToHex(bytes) {
+            return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function toHex(num, width) {
+            return (num >>> 0).toString(16).padStart(width, '0');
+        }
+
+        function renderStructureDiagram(pkt) {
+            const container = document.getElementById('structureDiagram');
+            const idClass = pkt.isPassthrough ? 'field-id-passthrough' : 'field-id';
+            
+            const blocks = [
+                { cls: 'field-header', text: '7e', label: '标识', w: '35px' },
+                { cls: 'field-version', text: pkt.version.toString(16).padStart(2,'0'), label: '版本', w: '40px' },
+                { cls: idClass, text: pkt.msgId.toString(16).padStart(4,'0'), label: pkt.isPassthrough?'透传ID':'ID', w: '55px' },
+                { cls: 'field-attr', text: pkt.msgAttr.toString(16).padStart(4,'0'), label: '属性', w: '55px' },
+                { cls: 'field-phone', text: '...', label: '手机号', w: '75px' },
+                { cls: 'field-seq', text: pkt.seq.toString(16).padStart(4,'0'), label: '流水', w: '50px' },
+                { cls: 'field-reserve', text: pkt.reserve.toString(16).padStart(2,'0'), label: '预留', w: '40px' },
+            ];
+            
+            if (pkt.hasSubPacket) {
+                blocks.push({ cls: 'field-sub', text: pkt.subPacketInfo.map(b=>b.toString(16).padStart(2,'0')).join(''), label: '分包', w: '70px' });
+            }
+            
+            blocks.push(
+                { cls: 'field-body', text: `Body(${pkt.body.length})`, label: pkt.isPassthrough?'透传体':'消息体', w: '100px' },
+                { cls: 'field-crc', text: pkt.crc.toString(16).padStart(2,'0'), label: '校验', w: '40px' },
+                { cls: 'field-header', text: '7e', label: '标识', w: '35px' }
+            );
+
+            container.innerHTML = blocks.map(b => `
+                <div class="struct-block ${b.cls}" style="min-width:${b.w};flex-shrink:0;">
+                    <div class="font-bold text-xs">${b.text}</div>
+                    <div class="struct-label">${b.label}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderMainTable(pkt, len) {
+            const tbody = document.getElementById('mainTableBody');
+            const phoneStr = bcdToString(pkt.phone);
+            const phoneDisplay = phoneStr.length > 8 ? phoneStr.substr(0,4)+'..'+phoneStr.substr(-4) : phoneStr;
+            const idClass = pkt.isPassthrough ? 'field-id-passthrough' : 'field-id';
+            
+            let bodyDisplay = pkt.body.length === 0 ? '<空>' : 
+                pkt.body.length <= 6 ? pkt.body.map(b => b.toString(16).padStart(2,'0')).join(' ') :
+                pkt.body.slice(0,4).map(b => b.toString(16).padStart(2,'0')).join(' ') + ' .. ' + 
+                pkt.body.slice(-2).map(b => b.toString(16).padStart(2,'0')).join(' ');
+
+            const subDisplay = pkt.hasSubPacket 
+                ? pkt.subPacketInfo.map(b => b.toString(16).padStart(2,'0')).join(' ')
+                : '<span class="text-slate-500">无</span>';
+
+            tbody.innerHTML = `
+                <tr>
+                    <td class="byte-cell field-header">7e</td>
+                    <td class="byte-cell field-version">${pkt.version.toString(16).padStart(2,'0')}</td>
+                    <td class="byte-cell ${idClass}" title="${MSG_TYPES[pkt.msgId] || '未知'}">
+                        ${pkt.msgId.toString(16).padStart(4,'0')}
+                    </td>
+                    <td class="byte-cell field-attr">${pkt.msgAttr.toString(16).padStart(4,'0')}</td>
+                    <td class="byte-cell field-phone" title="${phoneStr}">${phoneDisplay}</td>
+                    <td class="byte-cell field-seq">${pkt.seq.toString(16).padStart(4,'0')}</td>
+                    <td class="byte-cell field-reserve">${pkt.reserve.toString(16).padStart(2,'0')}</td>
+                    <td class="byte-cell ${pkt.hasSubPacket ? 'field-sub' : 'field-reserve'}">${subDisplay}</td>
+                    <td class="byte-cell field-body text-left" style="font-size:0.7rem;">${bodyDisplay}</td>
+                    <td class="byte-cell field-crc">${pkt.crc.toString(16).padStart(2,'0')}</td>
+                    <td class="byte-cell field-header">7e</td>
+                </tr>
+            `;
+        }
+
+        function renderBasicInfo(pkt) {
+            const msgName = MSG_TYPES[pkt.msgId] || "未知消息";
+            const typeColor = pkt.isPassthrough ? 'text-yellow-400' : 'text-blue-400';
+            const typeLabel = pkt.isPassthrough ? '透传消息' : '标准消息';
+            
+            document.getElementById('basicInfo').innerHTML = `
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">消息类型:</span>
+                    <span class="${typeColor} font-bold text-xs">${typeLabel}</span>
+                </div>
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">消息ID:</span>
+                    <span class="mono text-purple-400">0x${pkt.msgId.toString(16).padStart(4,'0')}</span>
+                </div>
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">消息名称:</span>
+                    <span class="${typeColor}">${msgName}</span>
+                </div>
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">协议版本:</span>
+                    <span class="mono text-emerald-400">${pkt.version}</span>
+                </div>
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">终端手机号:</span>
+                    <span class="mono text-pink-400 text-xs">${bcdToString(pkt.phone)}</span>
+                </div>
+                <div class="flex justify-between py-0.5">
+                    <span class="text-slate-400">消息流水号:</span>
+                    <span class="mono text-cyan-400">${pkt.seq}</span>
+                </div>
+            `;
+        }
+
+        function renderReserveInfo(pkt) {
+            const r = pkt.reserve;
+            const bin = r.toString(2).padStart(8, '0');
+            
+            document.getElementById('reserveInfo').innerHTML = `
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">十六进制:</span>
+                    <span class="mono text-slate-300">0x${r.toString(16).padStart(2,'0')}</span>
+                </div>
+                <div class="flex justify-between py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">十进制:</span>
+                    <span class="mono text-slate-300">${r}</span>
+                </div>
+                <div class="py-0.5 border-b border-slate-700/30">
+                    <span class="text-slate-400">二进制:</span>
+                    <span class="mono text-xs text-slate-500 ml-1">${bin}</span>
+                </div>
+                <div class="py-1">
+                    <div class="text-slate-400 mb-1">位解析:</div>
+                    <div class="grid grid-cols-4 gap-1 text-xs">
+                        ${[7,6,5,4,3,2,1,0].map(i => `
+                            <div class="bg-slate-800/50 p-1 rounded text-center">
+                                <div class="text-slate-500 text-xs">bit${i}</div>
+                                <div class="${(r>>i)&1 ? 'text-emerald-400' : 'text-slate-600'} font-bold">${(r>>i)&1}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div class="mt-1 p-1.5 bg-slate-800/30 rounded text-xs ${r===0?'text-emerald-400':'text-amber-400'}">
+                    ${r === 0 ? '✓ 标准预留值' : `⚠ 非零值: 0x${r.toString(16).padStart(2,'0')}`}
+                </div>
+            `;
+        }
+
+        function renderAttrBits(attr, len, enc, sub, res, ver) {
+            const bin = attr.toString(2).padStart(16, '0');
+            const bits = bin.split('');
+            
+            let html = `<div class="mono text-xs text-slate-500 text-center mb-1 tracking-widest">${bin}</div>`;
+            
+            html += '<div class="bit-row">';
+            for (let i = 15; i >= 0; i--) {
+                let label = i===15?'保':i===14?'版':i===13?'分':i>=10?'密':'长';
+                html += `<div class="bit bit-label">${label}${i}</div>`;
+            }
+            html += '</div>';
+            
+            html += '<div class="bit-row">';
+            bits.forEach(b => html += `<div class="bit ${b==='1'?'bit-1':'bit-0'}">${b}</div>`);
+            html += '</div>';
+            
+            const encTypes = ["不加密","RSA","SM4","保留","保留","保留","保留","保留"];
+            html += `
+                <div class="mt-2 grid grid-cols-2 gap-1 text-xs">
+                    <div class="bg-slate-800/50 p-1.5 rounded flex justify-between">
+                        <span class="text-slate-400">长度:</span>
+                        <span class="text-emerald-400 font-bold">${len}</span>
+                    </div>
+                    <div class="bg-slate-800/50 p-1.5 rounded flex justify-between">
+                        <span class="text-slate-400">加密:</span>
+                        <span class="text-purple-400">${encTypes[enc]}</span>
+                    </div>
+                    <div class="bg-slate-800/50 p-1.5 rounded flex justify-between">
+                        <span class="text-slate-400">分包:</span>
+                        <span class="text-blue-400">${sub?'是':'否'}</span>
+                    </div>
+                    <div class="bg-slate-800/50 p-1.5 rounded flex justify-between">
+                        <span class="text-slate-400">版本:</span>
+                        <span class="text-orange-400">${ver?'2019':'2011'}</span>
+                    </div>
+                </div>
+            `;
+            document.getElementById('attrBits').innerHTML = html;
+        }
+
+        function renderBodyParse(pkt) {
+            let html = `<div class="text-slate-400 mb-1">长度: <span class="text-indigo-400">${pkt.body.length} 字节</span></div>`;
+            
+            if (pkt.isPassthrough && pkt.passthrough) {
+                const pt = pkt.passthrough;
+                html += `<div class="border-t border-yellow-700/30 pt-1 mt-1">`;
+                html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">透传类型:</span><span class="mono text-yellow-400">0x${pt.type.toString(16).padStart(2,'0')}</span></div>`;
+                html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">类型名称:</span><span class="text-yellow-200">${pt.typeName}</span></div>`;
+                if (pt.extension && pt.extension.msgId != null) {
+                    html += `<div class="flex justify-between py-0.5 border-t border-yellow-700/20 mt-1"><span class="text-slate-400">扩展消息ID:</span><span class="mono text-yellow-400">0x${toHex(pt.extension.msgId,4)}</span></div>`;
+                    html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">扩展消息名:</span><span class="text-yellow-200 font-bold">${pt.extension.msgName}</span></div>`;
+                }
+                html += `</div>`;
+
+                // 透传详细解析合并到消息体解析面板
+                if (pt.extension) {
+                    const ext = pt.extension;
+                    html += `<div class="mt-2 p-2 bg-yellow-900/20 rounded border border-yellow-700/30">`;
+                    html += `<div class="text-yellow-400 font-bold text-xs mb-1">${ext.msgName || '扩展计时培训消息'}</div>`;
+                    if (ext.error) {
+                        html += `<div class="text-red-300 text-xs mb-1">⚠ ${ext.error}</div>`;
+                    }
+                    if (ext.msgId != null) {
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">扩展消息ID:</span><span class="mono text-yellow-100">0x${toHex(ext.msgId,4)}</span></div>`;
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">扩展属性:</span><span class="mono text-yellow-100">0x${toHex(ext.msgProps || 0,4)}</span></div>`;
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">驾培包序号:</span><span class="mono text-yellow-100">${ext.serialNo || 0}</span></div>`;
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">计时终端编号:</span><span class="mono text-yellow-100">${ext.terminalId || ''}</span></div>`;
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">数据长度:</span><span class="mono text-yellow-100">${ext.dataLength}</span></div>`;
+                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">实际数据长度:</span><span class="mono text-yellow-100">${ext.data.length}</span></div>`;
+                    }
+                    if (ext.dataParsed && ext.dataParsed.length) {
+                        ext.dataParsed.forEach(item => {
+                            html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">${item.name}:</span><span class="mono text-yellow-100">${item.val}</span></div>`;
+                        });
+                    }
+                    if (ext.tail && ext.tail.length) {
+                        html += `<div class="text-yellow-200 text-xs mt-1">尾部附加(${ext.tail.length}字节): 0x${bytesToHex(ext.tail)}</div>`;
+                    }
+                    html += '</div>';
+                }
+                html += `<div class="mt-2"><div class="text-slate-500 text-xs mb-1">透传原始数据 (${pt.content.length}字节):</div>`;
+                html += `<div class="grid grid-cols-8 gap-0.5">${pt.content.map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs text-slate-300" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('')}</div></div>`;
+            } else if (pkt.msgId === 0x8100 || pkt.msgId === 0x01A1) {
+                if (pkt.body.length >= 3) {
+                    const respSeq = (pkt.body[0] << 8) | pkt.body[1];
+                    const result = pkt.body[2];
+                    const results = ["成功","车辆已被注册","数据库中无该车辆","终端已被注册","数据库中无该终端"];
+                    html += `
+                        <div class="border-t border-slate-700/30 pt-1 mt-1 space-y-1">
+                            <div class="flex justify-between"><span class="text-slate-400">应答流水:</span><span class="mono text-white">${respSeq}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">结果:</span><span class="${result===0?'text-emerald-400':'text-red-400'} font-bold">${results[result]||'未知'}</span></div>
+                            ${pkt.body.length>3?`<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><div class="text-slate-500 text-xs">鉴权码:</div><div class="mono text-emerald-400 text-xs break-all">${String.fromCharCode(...pkt.body.slice(3))}</div></div>`:''}
+                        </div>
+                    `;
+                }
+            } else if (pkt.msgId === 0x0102) {
+                html += `<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><span class="text-slate-400">鉴权码:</span> <span class="mono text-emerald-400 break-all">${String.fromCharCode(...pkt.body)}</span></div>`;
+            } else {
+                const display = pkt.body.slice(0, 12).map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('');
+                html += `<div class="mt-1 grid grid-cols-6 gap-0.5">${display}${pkt.body.length>12?`<div class="text-slate-500 text-xs flex items-center justify-center">+${pkt.body.length-12}</div>`:''}</div>`;
+            }
+            document.getElementById('bodyParse').innerHTML = html;
+        }
+
+        function renderPassthrough(pkt) {
+            const panel = document.getElementById('passthroughPanel');
+            // 透传解析已并入“消息体解析”面板，单独面板隐藏。
+            panel.classList.add('hidden');
+        }
+
+        function renderCRC(calc, pkt, valid) {
+            document.getElementById('calcCrc').textContent = '0x' + calc.toString(16).padStart(2,'0');
+            document.getElementById('pktCrc').textContent = '0x' + pkt.toString(16).padStart(2,'0');
+            document.getElementById('crcResult').innerHTML = valid 
+                ? '<span class="text-emerald-400 font-bold">通过</span>' 
+                : '<span class="text-red-400 font-bold">失败</span>';
+            document.getElementById('crcStatus').innerHTML = valid 
+                ? '<span class="text-emerald-400">✓ 校验正确</span>' 
+                : '<span class="text-red-400">✗ 校验错误</span>';
+        }
+    </script>
+</body>
+</html>
