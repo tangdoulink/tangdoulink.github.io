@@ -655,7 +655,22 @@
                         push("教练编号", readAscii(data, 0, 16));
                         push("身份证号", readAscii(data, 16, 18));
                         push("准教车型", readAscii(data, 34, 2));
-                        if (len > 36) push("附加数据(hex)", bytesToHex(data.slice(36)));
+                        // GNSS 数据 (28字节)
+                        if (len >= 64) {
+                            push("─ GNSS数据 ─", "───────────────");
+                            const gnss = data.slice(36, 64);
+                            push("报警标志", `0x${bytesToHex(gnss.slice(0, 4))}`);
+                            push("状态位", `0x${bytesToHex(gnss.slice(4, 8))}`);
+                            const lat = (readU32(gnss, 8) / 1000000).toFixed(6);
+                            const lon = (readU32(gnss, 12) / 1000000).toFixed(6);
+                            push("纬度", `${lat}°`);
+                            push("经度", `${lon}°`);
+                            push("高程", `${(gnss[16] << 8) | gnss[17]} m`);
+                            push("速度", `${(gnss[18] << 8) | gnss[19]} km/h`);
+                            push("方向", `${(gnss[20] << 8) | gnss[21]}°`);
+                            push("GNSS时间", parseBCDTime(gnss.slice(22, 28)));
+                        }
+                        if (len > 64) push("附加数据(hex)", bytesToHex(data.slice(64)));
                     } else {
                         push("原始数据", hx);
                     }
