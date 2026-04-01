@@ -337,7 +337,7 @@
         };
 
         const EXAMPLES = {
-            register: "7e 01 00 00 30 05 01 38 61 98 93 55 00 01 00 01 00 01 31 32 33 34 35 41 42 43 31 32 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 54 45 52 4d 30 30 31 01 41 31 32 33 34 35 b8 7e",
+            register: "7e 01 00 00 3b 05 01 38 61 98 93 55 00 01 00 01 00 01 31 32 33 34 35 41 42 43 31 32 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 54 45 52 4d 30 30 31 38 36 30 30 30 30 30 31 31 32 33 34 35 36 37 01 b1 a6 41 31 32 33 34 35 9c 7e",
             registerResp: "7e 81 00 00 05 05 01 38 61 98 93 55 00 02 00 01 00 04 41 42 43 44 ef 7e",
             auth: "7e 01 02 00 0c 05 01 38 61 98 93 55 00 01 00 31 32 33 34 35 36 37 38 39 30 7e",
             heartbeat: "7e 00 02 00 00 05 01 38 61 98 93 55 00 0a 00 7e",
@@ -789,6 +789,16 @@
             return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
         }
 
+        function readGBK(bytes, offset, len) {
+            try {
+                const data = bytes.slice(offset, offset + len);
+                const decoder = new TextDecoder('gbk', { fatal: false });
+                return decoder.decode(new Uint8Array(data)).replace(/\0/g, '').trim();
+            } catch (e) {
+                return String.fromCharCode(...bytes.slice(offset, offset + len)).replace(/\0/g, '').trim();
+            }
+        }
+
         function toHex(num, width) {
             return (num >>> 0).toString(16).padStart(width, '0');
         }
@@ -1023,15 +1033,37 @@
                     `;
                 }
             } else if (pkt.msgId === 0x0100) {
-                // 终端注册消息体解析
-                if (pkt.body.length >= 37) {
-                    const province = (pkt.body[0] << 8) | pkt.body[1];
-                    const city = (pkt.body[2] << 8) | pkt.body[3];
-                    const makerId = String.fromCharCode(...pkt.body.slice(4, 9));
-                    const termModel = String.fromCharCode(...pkt.body.slice(9, 29)).replace(/\0/g, '').trim();
-                    const termId = String.fromCharCode(...pkt.body.slice(29, 36)).replace(/\0/g, '').trim();
-                    const plateColor = pkt.body[36];
-                    const plateNumber = pkt.body.length > 37 ? String.fromCharCode(...pkt.body.slice(37)).trim() : '';
+                // 终端注册消息体解析 (52字节固定部分 + 变长车牌号/VIN)
+                // 省域ID(2) + 市县域ID(2) + 制造商ID(5) + 终端型号(20) + 终端ID(7) + IMEI(15) + 车牌颜色(1) + 车牌号/VIN(n)
+                const FIXED_LEN = 52;
+                
+                if (pkt.body.length >= FIXED_LEN) {
+                    let offset = 0;
+                    
+                    const province = (pkt.body[offset] << 8) | pkt.body[offset + 1];
+                    offset += 2;
+                    
+                    const city = (pkt.body[offset] << 8) | pkt.body[offset + 1];
+                    offset += 2;
+                    
+                    const makerId = String.fromCharCode(...pkt.body.slice(offset, offset + 5)).replace(/\0/g, '').trim();
+                    offset += 5;
+                    
+                    const termModel = String.fromCharCode(...pkt.body.slice(offset, offset + 20)).replace(/\0/g, '').trim();
+                    offset += 20;
+                    
+                    const termId = String.fromCharCode(...pkt.body.slice(offset, offset + 7)).replace(/\0/g, '').trim();
+                    offset += 7;
+                    
+                    const imei = String.fromCharCode(...pkt.body.slice(offset, offset + 15)).replace(/\0/g, '').trim();
+                    offset += 15;
+                    
+                    const plateColor = pkt.body[offset];
+                    offset += 1;
+                    
+                    const plateNumber = pkt.body.length > offset 
+                        ? readGBK(pkt.body, offset, pkt.body.length - offset)
+                        : '';
                     
                     const plateColors = ['未上牌', '蓝色', '黄色', '黑色', '白色', '绿色', '黄绿色', '渐变绿色'];
                     
@@ -1047,7 +1079,7 @@
                             </div>
                             <div class="flex justify-between py-0.5 border-b border-slate-700/20">
                                 <span class="text-slate-400">制造商 ID:</span>
-                                <span class="mono text-emerald-400">${makerId}</span>
+                                <span class="mono text-emerald-400">${makerId || '(空)'}</span>
                             </div>
                             <div class="flex justify-between py-0.5 border-b border-slate-700/20">
                                 <span class="text-slate-400">终端型号:</span>
@@ -1058,17 +1090,21 @@
                                 <span class="mono text-cyan-400">${termId || '(空)'}</span>
                             </div>
                             <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">IMEI:</span>
+                                <span class="mono text-orange-400">${imei || '(空)'}</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
                                 <span class="text-slate-400">车牌颜色:</span>
                                 <span class="${plateColor === 0 ? 'text-slate-500' : 'text-amber-400'}">${plateColor} - ${plateColors[plateColor] || '未知'}</span>
                             </div>
                             <div class="flex justify-between py-0.5">
-                                <span class="text-slate-400">车牌号:</span>
-                                <span class="mono text-pink-400 font-bold">${plateNumber || '(未上牌)'}</span>
+                                <span class="text-slate-400">车牌号/VIN:</span>
+                                <span class="mono text-pink-400 font-bold">${plateNumber || '(未上牌/无VIN)'}</span>
                             </div>
                         </div>
                     `;
                 } else {
-                    html += `<div class="text-red-400 text-xs mt-2">⚠ 终端注册消息体长度不足 (需要≥37字节，实际${pkt.body.length}字节)</div>`;
+                    html += `<div class="text-red-400 text-xs mt-2">⚠ 终端注册消息体长度不足 (固定部分需${FIXED_LEN}字节，实际${pkt.body.length}字节)</div>`;
                     const display = pkt.body.map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('');
                     html += `<div class="mt-2 grid grid-cols-8 gap-0.5">${display}</div>`;
                 }
