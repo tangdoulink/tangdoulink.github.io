@@ -168,7 +168,8 @@
             
             <div class="mt-2 flex flex-wrap gap-1 text-xs">
                 <span class="text-slate-500 py-1">标准示例:</span>
-                <button class="example-btn bg-blue-900/30 hover:bg-blue-900/50 text-blue-300 px-2 py-1 rounded border border-blue-800/30" data-example="register">终端注册响应</button>
+                <button class="example-btn bg-blue-900/30 hover:bg-blue-900/50 text-blue-300 px-2 py-1 rounded border border-blue-800/30" data-example="register">终端注册请求</button>
+                <button class="example-btn bg-indigo-900/30 hover:bg-indigo-900/50 text-indigo-300 px-2 py-1 rounded border border-indigo-800/30" data-example="registerResp">终端注册应答</button>
                 <button class="example-btn bg-purple-900/30 hover:bg-purple-900/50 text-purple-300 px-2 py-1 rounded border border-purple-800/30" data-example="auth">终端鉴权</button>
                 <button class="example-btn bg-green-900/30 hover:bg-green-900/50 text-green-300 px-2 py-1 rounded border border-green-800/30" data-example="heartbeat">心跳包</button>
                 
@@ -336,7 +337,8 @@
         };
 
         const EXAMPLES = {
-            register: "7e 80 80 01 00 05 00 00 05 76 61 98 93 55 02 4d 00 02 4d 01 02 00 4b 7e",
+            register: "7e 01 00 00 30 05 01 38 61 98 93 55 00 01 00 01 00 01 31 32 33 34 35 41 42 43 31 32 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 54 45 52 4d 30 30 31 01 41 31 32 33 34 35 b8 7e",
+            registerResp: "7e 81 00 00 05 05 01 38 61 98 93 55 00 02 00 01 00 04 41 42 43 44 ef 7e",
             auth: "7e 01 02 00 0c 05 01 38 61 98 93 55 00 01 00 31 32 33 34 35 36 37 38 39 30 7e",
             heartbeat: "7e 00 02 00 00 05 01 38 61 98 93 55 00 0a 00 7e",
             
@@ -1019,6 +1021,56 @@
                             ${pkt.body.length>3?`<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><div class="text-slate-500 text-xs">鉴权码:</div><div class="mono text-emerald-400 text-xs break-all">${String.fromCharCode(...pkt.body.slice(3))}</div></div>`:''}
                         </div>
                     `;
+                }
+            } else if (pkt.msgId === 0x0100) {
+                // 终端注册消息体解析
+                if (pkt.body.length >= 37) {
+                    const province = (pkt.body[0] << 8) | pkt.body[1];
+                    const city = (pkt.body[2] << 8) | pkt.body[3];
+                    const makerId = String.fromCharCode(...pkt.body.slice(4, 9));
+                    const termModel = String.fromCharCode(...pkt.body.slice(9, 29)).replace(/\0/g, '').trim();
+                    const termId = String.fromCharCode(...pkt.body.slice(29, 36)).replace(/\0/g, '').trim();
+                    const plateColor = pkt.body[36];
+                    const plateNumber = pkt.body.length > 37 ? String.fromCharCode(...pkt.body.slice(37)).trim() : '';
+                    
+                    const plateColors = ['未上牌', '蓝色', '黄色', '黑色', '白色', '绿色', '黄绿色', '渐变绿色'];
+                    
+                    html += `
+                        <div class="border-t border-slate-700/30 pt-2 mt-2 space-y-1">
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">省域 ID:</span>
+                                <span class="mono text-blue-400">${province} (0x${province.toString(16).padStart(4,'0')})</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">市县域 ID:</span>
+                                <span class="mono text-blue-400">${city} (0x${city.toString(16).padStart(4,'0')})</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">制造商 ID:</span>
+                                <span class="mono text-emerald-400">${makerId}</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">终端型号:</span>
+                                <span class="mono text-purple-400">${termModel || '(空)'}</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">终端 ID:</span>
+                                <span class="mono text-cyan-400">${termId || '(空)'}</span>
+                            </div>
+                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
+                                <span class="text-slate-400">车牌颜色:</span>
+                                <span class="${plateColor === 0 ? 'text-slate-500' : 'text-amber-400'}">${plateColor} - ${plateColors[plateColor] || '未知'}</span>
+                            </div>
+                            <div class="flex justify-between py-0.5">
+                                <span class="text-slate-400">车牌号:</span>
+                                <span class="mono text-pink-400 font-bold">${plateNumber || '(未上牌)'}</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html += `<div class="text-red-400 text-xs mt-2">⚠ 终端注册消息体长度不足 (需要≥37字节，实际${pkt.body.length}字节)</div>`;
+                    const display = pkt.body.map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('');
+                    html += `<div class="mt-2 grid grid-cols-8 gap-0.5">${display}</div>`;
                 }
             } else if (pkt.msgId === 0x0102) {
                 html += `<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><span class="text-slate-400">鉴权码:</span> <span class="mono text-emerald-400 break-all">${String.fromCharCode(...pkt.body)}</span></div>`;
