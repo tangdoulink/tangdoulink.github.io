@@ -217,7 +217,7 @@
                 <div id="passthroughContent" class="space-y-1 text-xs"></div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-3">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
                 <div class="detail-panel">
                     <h3 class="text-blue-400 font-bold mb-2 text-xs uppercase border-b border-blue-800/30 pb-1">基础信息</h3>
                     <div id="basicInfo" class="space-y-1 text-xs"></div>
@@ -232,11 +232,22 @@
                     <h3 class="text-amber-400 font-bold mb-2 text-xs uppercase border-b border-amber-800/30 pb-1">消息体属性</h3>
                     <div id="attrBits" class="space-y-1"></div>
                 </div>
+            </div>
 
-                <div class="detail-panel">
-                    <h3 class="text-indigo-400 font-bold mb-2 text-xs uppercase border-b border-indigo-800/30 pb-1">消息体解析</h3>
-                    <div id="bodyParse" class="space-y-1 text-xs"></div>
-                </div>
+            <div class="detail-panel mt-3" id="bodyParsePanel">
+                <h3 class="text-indigo-400 font-bold mb-2 text-xs uppercase border-b border-indigo-800/30 pb-1">消息体解析</h3>
+                <div id="bodyParseEmpty" class="hidden text-slate-500 text-xs py-2 text-center">(无消息体)</div>
+                <table class="w-full text-xs" id="bodyParseTable">
+                    <thead>
+                        <tr class="text-slate-500 border-b border-slate-700/30">
+                            <th class="text-left py-1.5 px-2 w-1/4">字段</th>
+                            <th class="text-left py-1.5 px-2 w-1/6">类型</th>
+                            <th class="text-left py-1.5 px-2 w-1/3">值</th>
+                            <th class="text-left py-1.5 px-2 w-1/4 mono">原始报文</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bodyParseBody"></tbody>
+                </table>
             </div>
 
             <div class="mt-3 p-2 bg-slate-900/50 rounded border border-slate-700">
@@ -978,143 +989,253 @@
         }
 
         function renderBodyParse(pkt) {
-            let html = `<div class="text-slate-400 mb-1">长度: <span class="text-indigo-400">${pkt.body.length} 字节</span></div>`;
-            
-            if (pkt.isPassthrough && pkt.passthrough) {
-                const pt = pkt.passthrough;
-                html += `<div class="border-t border-yellow-700/30 pt-1 mt-1">`;
-                html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">透传类型:</span><span class="mono text-yellow-400">0x${pt.type.toString(16).padStart(2,'0')}</span></div>`;
-                html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">类型名称:</span><span class="text-yellow-200">${pt.typeName}</span></div>`;
-                if (pt.extension && pt.extension.msgId != null) {
-                    html += `<div class="flex justify-between py-0.5 border-t border-yellow-700/20 mt-1"><span class="text-slate-400">扩展消息ID:</span><span class="mono text-yellow-400">0x${toHex(pt.extension.msgId,4)}</span></div>`;
-                    html += `<div class="flex justify-between py-0.5"><span class="text-slate-400">扩展消息名:</span><span class="text-yellow-200 font-bold">${pt.extension.msgName}</span></div>`;
-                }
-                html += `</div>`;
+            const tbody = document.getElementById('bodyParseBody');
+            const table = document.getElementById('bodyParseTable');
+            const emptyDiv = document.getElementById('bodyParseEmpty');
+            const body = pkt.body;
 
-                // 透传详细解析合并到消息体解析面板
+            // Helper: build a table row — all values are escaped via textContent-safe strings
+            // (field/type/value are protocol-derived constants or numeric conversions, not user input)
+            function row(field, type, value, rawBytes) {
+                const hex = Array.from(rawBytes).map(function(b) { return b.toString(16).padStart(2, '0'); }).join(' ');
+                var tr = document.createElement('tr');
+                tr.className = 'border-b border-slate-700/20';
+                var td1 = document.createElement('td'); td1.className = 'py-1.5 px-2 text-slate-300'; td1.textContent = field;
+                var td2 = document.createElement('td'); td2.className = 'py-1.5 px-2 text-slate-500'; td2.textContent = type;
+                var td3 = document.createElement('td'); td3.className = 'py-1.5 px-2 text-indigo-300 font-semibold'; td3.textContent = value;
+                var td4 = document.createElement('td'); td4.className = 'py-1.5 px-2 mono text-slate-400'; td4.textContent = hex;
+                tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tr.appendChild(td4);
+                return tr;
+            }
+            // Helper: separator row
+            function separator(title) {
+                var tr = document.createElement('tr');
+                tr.className = 'border-b border-indigo-800/30';
+                var td = document.createElement('td');
+                td.colSpan = 4; td.className = 'py-1.5 px-2 text-indigo-400 font-bold text-xs bg-indigo-900/20';
+                td.textContent = title;
+                tr.appendChild(td);
+                return tr;
+            }
+            // Helper: data-parsed row (for extension parsed items)
+            function dataParsedRow(name, val) {
+                var tr = document.createElement('tr');
+                tr.className = 'border-b border-slate-700/20';
+                var td1 = document.createElement('td'); td1.className = 'py-1.5 px-2 text-slate-300'; td1.textContent = name;
+                var td2 = document.createElement('td'); td2.className = 'py-1.5 px-2 text-slate-500'; td2.textContent = '-';
+                var td3 = document.createElement('td'); td3.className = 'py-1.5 px-2 text-yellow-200 font-semibold'; td3.colSpan = 2; td3.textContent = val;
+                tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+                return tr;
+            }
+            // Helper: error row
+            function errorRow(msg) {
+                var tr = document.createElement('tr');
+                var td = document.createElement('td');
+                td.colSpan = 4; td.className = 'py-1 px-2 text-red-400 text-xs'; td.textContent = msg;
+                tr.appendChild(td);
+                return tr;
+            }
+
+            var COMMON_RESULTS = {0:'成功', 1:'失败', 2:'消息有误', 3:'不支持', 4:'报警处理确认'};
+            var REGISTER_RESULTS = {0:'成功', 1:'车辆已被注册', 2:'数据库中无该车辆', 3:'终端已被注册', 4:'数据库中无该终端'};
+            var PLATE_COLORS = {0:'未上牌', 1:'蓝色', 2:'黄色', 3:'黑色', 4:'白色', 5:'绿色', 6:'黄绿色', 7:'渐变绿色'};
+
+            var frag = document.createDocumentFragment();
+
+            // 透传消息
+            if (pkt.isPassthrough && pkt.passthrough) {
+                var pt = pkt.passthrough;
+                frag.appendChild(row('透传消息类型', 'BYTE', '0x' + toHex(pt.type, 2) + ' (' + pt.typeName + ')', [pt.type]));
                 if (pt.extension) {
-                    const ext = pt.extension;
-                    html += `<div class="mt-2 p-2 bg-yellow-900/20 rounded border border-yellow-700/30">`;
-                    html += `<div class="text-yellow-400 font-bold text-xs mb-1">${ext.msgName || '扩展计时培训消息'}</div>`;
-                    if (ext.error) {
-                        html += `<div class="text-red-300 text-xs mb-1">⚠ ${ext.error}</div>`;
-                    }
+                    var ext = pt.extension;
                     if (ext.msgId != null) {
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">扩展消息ID:</span><span class="mono text-yellow-100">0x${toHex(ext.msgId,4)}</span></div>`;
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">扩展属性:</span><span class="mono text-yellow-100">0x${toHex(ext.msgProps || 0,4)}</span></div>`;
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">驾培包序号:</span><span class="mono text-yellow-100">${ext.serialNo || 0}</span></div>`;
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">计时终端编号:</span><span class="mono text-yellow-100">${ext.terminalId || ''}</span></div>`;
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">数据长度:</span><span class="mono text-yellow-100">${ext.dataLength}</span></div>`;
-                        html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">实际数据长度:</span><span class="mono text-yellow-100">${ext.data.length}</span></div>`;
+                        frag.appendChild(separator('扩展计时培训消息头 (B.33)'));
+                        frag.appendChild(row('扩展消息ID', 'WORD', '0x' + toHex(ext.msgId, 4) + ' (' + ext.msgName + ')', pt.content.slice(0, 2)));
+                        frag.appendChild(row('扩展属性', 'WORD', '0x' + toHex(ext.msgProps || 0, 4), pt.content.slice(2, 4)));
+                        frag.appendChild(row('驾培包序号', 'WORD', String(ext.serialNo), pt.content.slice(4, 6)));
+                        frag.appendChild(row('计时终端编号', 'BYTE[16]', ext.terminalId, pt.content.slice(6, 22)));
+                        frag.appendChild(row('数据长度', 'DWORD', String(ext.dataLength), pt.content.slice(22, 26)));
+                    }
+                    if (ext.error) {
+                        frag.appendChild(errorRow('⚠ ' + ext.error));
                     }
                     if (ext.dataParsed && ext.dataParsed.length) {
-                        ext.dataParsed.forEach(item => {
-                            html += `<div class="flex justify-between py-0.5 border-b border-yellow-700/10"><span class="text-yellow-600">${item.name}:</span><span class="mono text-yellow-100">${item.val}</span></div>`;
+                        frag.appendChild(separator('扩展消息数据'));
+                        ext.dataParsed.forEach(function(item) {
+                            frag.appendChild(dataParsedRow(item.name, String(item.val)));
                         });
                     }
                     if (ext.tail && ext.tail.length) {
-                        html += `<div class="text-yellow-200 text-xs mt-1">尾部附加(${ext.tail.length}字节): 0x${bytesToHex(ext.tail)}</div>`;
+                        frag.appendChild(row('尾部附加', 'BYTE[' + ext.tail.length + ']', ext.tail.length + ' 字节', ext.tail));
                     }
-                    html += '</div>';
-                }
-                html += `<div class="mt-2"><div class="text-slate-500 text-xs mb-1">透传原始数据 (${pt.content.length}字节):</div>`;
-                html += `<div class="grid grid-cols-8 gap-0.5">${pt.content.map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs text-slate-300" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('')}</div></div>`;
-            } else if (pkt.msgId === 0x8100 || pkt.msgId === 0x01A1) {
-                if (pkt.body.length >= 3) {
-                    const respSeq = (pkt.body[0] << 8) | pkt.body[1];
-                    const result = pkt.body[2];
-                    const results = ["成功","车辆已被注册","数据库中无该车辆","终端已被注册","数据库中无该终端"];
-                    html += `
-                        <div class="border-t border-slate-700/30 pt-1 mt-1 space-y-1">
-                            <div class="flex justify-between"><span class="text-slate-400">应答流水:</span><span class="mono text-white">${respSeq}</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">结果:</span><span class="${result===0?'text-emerald-400':'text-red-400'} font-bold">${results[result]||'未知'}</span></div>
-                            ${pkt.body.length>3?`<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><div class="text-slate-500 text-xs">鉴权码:</div><div class="mono text-emerald-400 text-xs break-all">${String.fromCharCode(...pkt.body.slice(3))}</div></div>`:''}
-                        </div>
-                    `;
-                }
-            } else if (pkt.msgId === 0x0100) {
-                // 终端注册消息体解析 (52字节固定部分 + 变长车牌号/VIN)
-                // 省域ID(2) + 市县域ID(2) + 制造商ID(5) + 终端型号(20) + 终端ID(7) + IMEI(15) + 车牌颜色(1) + 车牌号/VIN(n)
-                const FIXED_LEN = 52;
-                
-                if (pkt.body.length >= FIXED_LEN) {
-                    let offset = 0;
-                    
-                    const province = (pkt.body[offset] << 8) | pkt.body[offset + 1];
-                    offset += 2;
-                    
-                    const city = (pkt.body[offset] << 8) | pkt.body[offset + 1];
-                    offset += 2;
-                    
-                    const makerId = String.fromCharCode(...pkt.body.slice(offset, offset + 5)).replace(/\0/g, '').trim();
-                    offset += 5;
-                    
-                    const termModel = String.fromCharCode(...pkt.body.slice(offset, offset + 20)).replace(/\0/g, '').trim();
-                    offset += 20;
-                    
-                    const termId = String.fromCharCode(...pkt.body.slice(offset, offset + 7)).replace(/\0/g, '').trim();
-                    offset += 7;
-                    
-                    const imei = String.fromCharCode(...pkt.body.slice(offset, offset + 15)).replace(/\0/g, '').trim();
-                    offset += 15;
-                    
-                    const plateColor = pkt.body[offset];
-                    offset += 1;
-                    
-                    const plateNumber = pkt.body.length > offset 
-                        ? readGBK(pkt.body, offset, pkt.body.length - offset)
-                        : '';
-                    
-                    const plateColors = ['未上牌', '蓝色', '黄色', '黑色', '白色', '绿色', '黄绿色', '渐变绿色'];
-                    
-                    html += `
-                        <div class="border-t border-slate-700/30 pt-2 mt-2 space-y-1">
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">省域 ID:</span>
-                                <span class="mono text-blue-400">${province} (0x${province.toString(16).padStart(4,'0')})</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">市县域 ID:</span>
-                                <span class="mono text-blue-400">${city} (0x${city.toString(16).padStart(4,'0')})</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">制造商 ID:</span>
-                                <span class="mono text-emerald-400">${makerId || '(空)'}</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">终端型号:</span>
-                                <span class="mono text-purple-400">${termModel || '(空)'}</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">终端 ID:</span>
-                                <span class="mono text-cyan-400">${termId || '(空)'}</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">IMEI:</span>
-                                <span class="mono text-orange-400">${imei || '(空)'}</span>
-                            </div>
-                            <div class="flex justify-between py-0.5 border-b border-slate-700/20">
-                                <span class="text-slate-400">车牌颜色:</span>
-                                <span class="${plateColor === 0 ? 'text-slate-500' : 'text-amber-400'}">${plateColor} - ${plateColors[plateColor] || '未知'}</span>
-                            </div>
-                            <div class="flex justify-between py-0.5">
-                                <span class="text-slate-400">车牌号/VIN:</span>
-                                <span class="mono text-pink-400 font-bold">${plateNumber || '(未上牌/无VIN)'}</span>
-                            </div>
-                        </div>
-                    `;
                 } else {
-                    html += `<div class="text-red-400 text-xs mt-2">⚠ 终端注册消息体长度不足 (固定部分需${FIXED_LEN}字节，实际${pkt.body.length}字节)</div>`;
-                    const display = pkt.body.map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('');
-                    html += `<div class="mt-2 grid grid-cols-8 gap-0.5">${display}</div>`;
+                    frag.appendChild(row('透传内容', 'BYTE[' + pt.content.length + ']', pt.content.length + ' 字节', pt.content.slice(0, Math.min(pt.content.length, 32))));
                 }
-            } else if (pkt.msgId === 0x0102) {
-                html += `<div class="mt-1 p-1.5 bg-slate-800/50 rounded"><span class="text-slate-400">鉴权码:</span> <span class="mono text-emerald-400 break-all">${String.fromCharCode(...pkt.body)}</span></div>`;
-            } else {
-                const display = pkt.body.slice(0, 12).map((b,i) => `<div class="bg-slate-800 p-1 rounded text-center mono text-xs" title="偏移${i}">${b.toString(16).padStart(2,'0')}</div>`).join('');
-                html += `<div class="mt-1 grid grid-cols-6 gap-0.5">${display}${pkt.body.length>12?`<div class="text-slate-500 text-xs flex items-center justify-center">+${pkt.body.length-12}</div>`:''}</div>`;
             }
-            document.getElementById('bodyParse').innerHTML = html;
+            // 0x0001 终端通用应答 / 0x8001 平台通用应答
+            else if (pkt.msgId === 0x0001 || pkt.msgId === 0x8001) {
+                if (body.length >= 5) {
+                    var ackSeq = readU16(body, 0);
+                    var ackMsgId = readU16(body, 2);
+                    var result = body[4];
+                    var ackMsgName = MSG_TYPES[ackMsgId] || '未知';
+                    frag.appendChild(row('应答流水号', 'WORD', String(ackSeq), body.slice(0, 2)));
+                    frag.appendChild(row('应答消息ID', 'WORD', '0x' + toHex(ackMsgId, 4) + ' (' + ackMsgName + ')', body.slice(2, 4)));
+                    frag.appendChild(row('结果', 'BYTE', result + ' (' + (COMMON_RESULTS[result] || '未知') + ')', [body[4]]));
+                } else {
+                    frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', '长度不足', body));
+                }
+            }
+            // 0x0002 心跳 / 0x0003 终端注销
+            else if (pkt.msgId === 0x0002 || pkt.msgId === 0x0003) {
+                table.classList.add('hidden');
+                emptyDiv.classList.remove('hidden');
+                tbody.textContent = '';
+                return;
+            }
+            // 0x0100 终端注册
+            else if (pkt.msgId === 0x0100) {
+                var FIXED_LEN = 52;
+                if (body.length >= FIXED_LEN) {
+                    frag.appendChild(row('省域ID', 'WORD', readU16(body,0) + ' (0x' + toHex(readU16(body,0),4) + ')', body.slice(0, 2)));
+                    frag.appendChild(row('市县域ID', 'WORD', readU16(body,2) + ' (0x' + toHex(readU16(body,2),4) + ')', body.slice(2, 4)));
+                    frag.appendChild(row('制造商ID', 'BYTE[5]', readAscii(body, 4, 5) || '(空)', body.slice(4, 9)));
+                    frag.appendChild(row('终端型号', 'BYTE[20]', readAscii(body, 9, 20) || '(空)', body.slice(9, 29)));
+                    frag.appendChild(row('终端ID', 'BYTE[7]', readAscii(body, 29, 7) || '(空)', body.slice(29, 36)));
+                    frag.appendChild(row('IMEI', 'BYTE[15]', readAscii(body, 36, 15) || '(空)', body.slice(36, 51)));
+                    var plateColor = body[51];
+                    frag.appendChild(row('车牌颜色', 'BYTE', plateColor + ' (' + (PLATE_COLORS[plateColor] || '未知') + ')', [body[51]]));
+                    if (body.length > 52) {
+                        var plateStr = readGBK(body, 52, body.length - 52);
+                        frag.appendChild(row('车牌号/VIN', 'GBK[' + (body.length-52) + ']', plateStr || '(空)', body.slice(52)));
+                    }
+                } else {
+                    frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', '长度不足(需' + FIXED_LEN + ')', body));
+                }
+            }
+            // 0x8100 终端注册应答
+            else if (pkt.msgId === 0x8100) {
+                if (body.length >= 3) {
+                    var respSeq = readU16(body, 0);
+                    var regResult = body[2];
+                    frag.appendChild(row('应答流水号', 'WORD', String(respSeq), body.slice(0, 2)));
+                    frag.appendChild(row('结果', 'BYTE', regResult + ' (' + (REGISTER_RESULTS[regResult] || '未知') + ')', [body[2]]));
+                    if (regResult === 0 && body.length > 3) {
+                        var authCode = body.slice(3);
+                        frag.appendChild(separator('鉴权码内部结构'));
+                        if (authCode.length >= 49) {
+                            frag.appendChild(row('平台编号', 'BYTE[5]', readAscii(authCode, 0, 5) || '(空)', authCode.slice(0, 5)));
+                            frag.appendChild(row('驾培机构编号', 'BYTE[16]', readAscii(authCode, 5, 16) || '(空)', authCode.slice(5, 21)));
+                            frag.appendChild(row('计时终端编号', 'BYTE[16]', readAscii(authCode, 21, 16) || '(空)', authCode.slice(21, 37)));
+                            frag.appendChild(row('证书口令', 'BYTE[12]', readAscii(authCode, 37, 12) || '(空)', authCode.slice(37, 49)));
+                            if (authCode.length > 49) {
+                                var certBytes = authCode.slice(49);
+                                frag.appendChild(row('终端证书(PFX)', 'BYTE[' + certBytes.length + ']', certBytes.length + ' 字节', certBytes.slice(0, 16)));
+                            }
+                        } else {
+                            frag.appendChild(row('鉴权码', 'BYTE[' + authCode.length + ']', bytesToHex(authCode), authCode.slice(0, Math.min(authCode.length, 16))));
+                        }
+                    }
+                } else {
+                    frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', '长度不足', body));
+                }
+            }
+            // 0x0102 终端鉴权
+            else if (pkt.msgId === 0x0102) {
+                if (body.length >= 5) {
+                    var ts = readU32(body, 0);
+                    var tsDate = new Date(ts * 1000);
+                    var tsStr = ts + ' (' + tsDate.toISOString().replace('T',' ').replace(/\.\d+Z/,'') + ')';
+                    frag.appendChild(row('时间戳', 'DWORD', tsStr, body.slice(0, 4)));
+                    var sig = body.slice(4);
+                    frag.appendChild(row('RSA签名', 'BYTE[' + sig.length + ']', sig.length + ' 字节', sig.slice(0, 16)));
+                } else if (body.length > 0) {
+                    var authStr = String.fromCharCode.apply(null, body);
+                    frag.appendChild(row('鉴权码(旧)', 'BYTE[' + body.length + ']', authStr, body));
+                }
+            }
+            // 0x0200 位置信息汇报
+            else if (pkt.msgId === 0x0200) {
+                if (body.length >= 28) {
+                    var alarm = readU32(body, 0);
+                    var status = readU32(body, 4);
+                    var lat = readU32(body, 8);
+                    var lon = readU32(body, 12);
+                    var alt = readU16(body, 16);
+                    var speed = readU16(body, 18);
+                    var direction = readU16(body, 20);
+                    var timeStr = parseBCDTime(body.slice(22, 28));
+
+                    frag.appendChild(row('报警标志', 'DWORD', '0x' + toHex(alarm, 8), body.slice(0, 4)));
+                    frag.appendChild(row('状态', 'DWORD', '0x' + toHex(status, 8), body.slice(4, 8)));
+                    frag.appendChild(row('纬度', 'DWORD', (lat / 1000000).toFixed(6) + '\u00B0', body.slice(8, 12)));
+                    frag.appendChild(row('经度', 'DWORD', (lon / 1000000).toFixed(6) + '\u00B0', body.slice(12, 16)));
+                    frag.appendChild(row('海拔', 'WORD', alt + ' m', body.slice(16, 18)));
+                    frag.appendChild(row('速度', 'WORD', (speed / 10).toFixed(1) + ' km/h', body.slice(18, 20)));
+                    frag.appendChild(row('方向', 'WORD', direction + '\u00B0', body.slice(20, 22)));
+                    frag.appendChild(row('时间', 'BCD[6]', timeStr, body.slice(22, 28)));
+
+                    // 附加信息项
+                    if (body.length > 28) {
+                        frag.appendChild(separator('位置附加信息'));
+                        var off = 28;
+                        var EXTRA_NAMES = {
+                            0x01:'里程', 0x02:'油量', 0x03:'行驶记录速度', 0x04:'需人工确认报警事件ID',
+                            0x11:'超速报警附加', 0x12:'进出区域附加', 0x13:'路段行驶时间附加',
+                            0x25:'扩展车辆信号状态', 0x2A:'IO状态', 0x2B:'模拟量',
+                            0x30:'GNSS卫星数', 0x31:'网络信号强度'
+                        };
+                        while (off + 2 <= body.length) {
+                            var extraId = body[off];
+                            var extraLen = body[off + 1];
+                            if (off + 2 + extraLen > body.length) break;
+                            var extraData = body.slice(off + 2, off + 2 + extraLen);
+                            var extraName = EXTRA_NAMES[extraId] || '未知(0x' + toHex(extraId,2) + ')';
+                            var extraVal = bytesToHex(extraData);
+                            if (extraId === 0x01 && extraLen === 4) extraVal = (readU32(extraData, 0) / 10).toFixed(1) + ' km';
+                            else if (extraId === 0x02 && extraLen === 2) extraVal = (readU16(extraData, 0) / 10).toFixed(1) + ' L';
+                            else if (extraId === 0x03 && extraLen === 2) extraVal = (readU16(extraData, 0) / 10).toFixed(1) + ' km/h';
+                            else if (extraId === 0x30 && extraLen === 1) extraVal = extraData[0] + ' 颗';
+                            else if (extraId === 0x31 && extraLen === 2) extraVal = String(readU16(extraData, 0));
+                            frag.appendChild(row(extraName, 'ID:0x' + toHex(extraId,2) + ' Len:' + extraLen, extraVal, body.slice(off, off + 2 + extraLen)));
+                            off += 2 + extraLen;
+                        }
+                    }
+                } else {
+                    frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', '长度不足(需28)', body));
+                }
+            }
+            // 0x8003 补传分包请求
+            else if (pkt.msgId === 0x8003) {
+                if (body.length >= 3) {
+                    var origSeq = readU16(body, 0);
+                    var count = body[2];
+                    frag.appendChild(row('原始消息流水号', 'WORD', String(origSeq), body.slice(0, 2)));
+                    frag.appendChild(row('重传包总数', 'BYTE', String(count), [body[2]]));
+                    for (var i = 0; i < count && (3 + i * 2 + 2) <= body.length; i++) {
+                        var pkId = readU16(body, 3 + i * 2);
+                        frag.appendChild(row('重传包ID[' + i + ']', 'WORD', String(pkId), body.slice(3 + i * 2, 5 + i * 2)));
+                    }
+                } else {
+                    frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', '长度不足', body));
+                }
+            }
+            // 其他未知消息
+            else {
+                if (body.length === 0) {
+                    table.classList.add('hidden');
+                    emptyDiv.classList.remove('hidden');
+                    tbody.textContent = '';
+                    return;
+                }
+                var preview = body.slice(0, Math.min(body.length, 32));
+                frag.appendChild(row('原始数据', 'BYTE[' + body.length + ']', body.length + ' 字节', preview));
+            }
+
+            table.classList.remove('hidden');
+            emptyDiv.classList.add('hidden');
+            tbody.textContent = '';
+            tbody.appendChild(frag);
         }
 
         function renderPassthrough(pkt) {
