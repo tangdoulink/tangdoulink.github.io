@@ -606,7 +606,17 @@
 
         function parseExtensionData(msgId, data) {
             const out = [];
-            const push = (name, val) => out.push({name, val});
+            const push = (name, type, val, raw) => {
+                if (raw === undefined && val === undefined) {
+                    // push(name, val) 兼容旧调用
+                    out.push({name, type: '', val: String(type), raw: ''});
+                } else if (raw === undefined) {
+                    // push(name, type, val) 无原始hex
+                    out.push({name, type, val: String(val), raw: ''});
+                } else {
+                    out.push({name, type, val: String(val), raw});
+                }
+            };
             const len = data.length;
             const hx = bytesToHex(data);
             switch (msgId) {
@@ -731,7 +741,7 @@
                     break;
                 }
                 case 0x0203: {
-                    // 学时上报: recordId(26) + reportType(1) + studentId(16) + coachId(16) + classroomId(4) + ...
+                    // 学时上报: recordId(26) + reportType(1) + studentId(16) + coachId(16) + classId(4) + ...
                     if (len >= 59) {
                         push("记录ID", readAscii(data, 0, 26));
                         push("上报类型", `0x${toHex(data[26], 2)}`);
@@ -745,17 +755,25 @@
                     break;
                 }
                 case 0x0305: {
-                    if (len >= 39) {
-                        push("照片编号", readAscii(data, 0, 10));
-                        push("人员编号", readAscii(data, 10, 16));
-                        push("上传模式", `0x${toHex(data[26], 2)}`);
-                        push("摄像通道", data[27]);
-                        push("图像尺寸", data[28]);
-                        push("事件类型", `0x${toHex(data[29], 2)}`);
-                        push("总包数", readU16(data, 30));
-                        push("照片总字节数", readU32(data, 32));
-                        push("课堂ID", readU32(data, 36));
-                        if (len > 40) push("附加数据(hex)", bytesToHex(data.slice(40)));
+                    const uploadModeMap = {1:'平台拍照指令',2:'平台查询要求',129:'终端主动',255:'停止拍摄上传'};
+                    const resolutionMap = {0x01:'320×240',0x02:'640×480',0x03:'800×600',0x04:'1024×768',0x05:'176×144[QCIF]',0x06:'352×288[CIF]',0x07:'704×288[HALF D1]',0x08:'704×576[D1]'};
+                    const eventTypeMap = {0:'中心查询',1:'紧急报警',2:'关门达速',3:'侧翻报警',4:'上客',5:'定时拍照',7:'出区域',8:'事故疑点(紧急刹车)',9:'开车门',17:'学员登录拍照',19:'学员培训过程中拍照',20:'教练员登录拍照',21:'教练员登录后签到'};
+                    if (len >= 36) {
+                        push("照片编号", "BYTE[10]", readAscii(data, 0, 10), bytesToHex(data.slice(0, 10)));
+                        push("学员/教练编号", "BYTE[16]", readAscii(data, 10, 16), bytesToHex(data.slice(10, 26)));
+                        const mode = data[26];
+                        push("上传模式", "BYTE", `${mode} (${uploadModeMap[mode]||'未知'})`, toHex(mode, 2));
+                        const ch = data[27];
+                        push("摄像头通道号", "BYTE", ch === 0 ? '0 (自动)' : ch, toHex(ch, 2));
+                        const res = data[28];
+                        push("图片尺寸", "BYTE", `0x${toHex(res,2)} (${resolutionMap[res]||'未知'})`, toHex(res, 2));
+                        const evt = data[29];
+                        push("事件类型", "BYTE", `${evt} (${eventTypeMap[evt]||'未知'})`, toHex(evt, 2));
+                        push("总包数", "WORD", readU16(data, 30), bytesToHex(data.slice(30, 32)));
+                        push("照片数据大小", "DWORD", readU32(data, 32), bytesToHex(data.slice(32, 36)));
+                        if (len >= 40) push("课堂ID", "DWORD", readU32(data, 36), bytesToHex(data.slice(36, 40)));
+                        if (len >= 78) push("附加GNSS数据包", "BYTE[38]", '(详见位置基本信息)', bytesToHex(data.slice(40, 78)));
+                        if (len >= 79) push("人脸识别置信度", "BYTE", `${data[78]} (0-100)`, toHex(data[78], 2));
                     } else {
                         push("原始数据", hx);
                     }
@@ -1018,13 +1036,19 @@
                 return tr;
             }
             // Helper: data-parsed row (for extension parsed items)
-            function dataParsedRow(name, val) {
+            function dataParsedRow(item) {
                 var tr = document.createElement('tr');
                 tr.className = 'border-b border-slate-700/20';
-                var td1 = document.createElement('td'); td1.className = 'py-1.5 px-2 text-slate-300'; td1.textContent = name;
-                var td2 = document.createElement('td'); td2.className = 'py-1.5 px-2 text-slate-500'; td2.textContent = '-';
-                var td3 = document.createElement('td'); td3.className = 'py-1.5 px-2 text-yellow-200 font-semibold'; td3.colSpan = 2; td3.textContent = val;
-                tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+                var td1 = document.createElement('td'); td1.className = 'py-1.5 px-2 text-slate-300'; td1.textContent = item.name;
+                var td2 = document.createElement('td'); td2.className = 'py-1.5 px-2 text-slate-500'; td2.textContent = item.type || '-';
+                var td3 = document.createElement('td'); td3.className = 'py-1.5 px-2 text-yellow-200 font-semibold'; td3.textContent = item.val;
+                var td4 = document.createElement('td'); td4.className = 'py-1.5 px-2 text-slate-500 mono'; td4.textContent = item.raw || '';
+                if (!item.type && !item.raw) {
+                    td3.colSpan = 2;
+                    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+                } else {
+                    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tr.appendChild(td4);
+                }
                 return tr;
             }
             // Helper: error row
@@ -1062,7 +1086,7 @@
                     if (ext.dataParsed && ext.dataParsed.length) {
                         frag.appendChild(separator('扩展消息数据'));
                         ext.dataParsed.forEach(function(item) {
-                            frag.appendChild(dataParsedRow(item.name, String(item.val)));
+                            frag.appendChild(dataParsedRow(item));
                         });
                     }
                     if (ext.tail && ext.tail.length) {
