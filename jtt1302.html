@@ -250,6 +250,39 @@
                 </table>
             </div>
 
+            <!-- 计时扩展消息双栏布局 -->
+            <div id="extPanel" class="hidden mt-3">
+                <div style="display:grid; grid-template-columns:35% 65%; gap:12px;">
+                    <div class="detail-panel">
+                        <h3 class="text-amber-400 font-bold mb-2 text-xs uppercase border-b border-amber-800/30 pb-1">透传消息类型</h3>
+                        <table class="w-full text-xs" id="extLeftTable">
+                            <thead>
+                                <tr class="text-slate-500 border-b border-slate-700/30">
+                                    <th class="text-left py-1.5 px-2 w-1/3">字段</th>
+                                    <th class="text-left py-1.5 px-2 w-1/4">类型</th>
+                                    <th class="text-left py-1.5 px-2">值</th>
+                                </tr>
+                            </thead>
+                            <tbody id="extLeftBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="detail-panel">
+                        <h3 class="text-emerald-400 font-bold mb-2 text-xs uppercase border-b border-emerald-800/30 pb-1">扩展消息数据</h3>
+                        <table class="w-full text-xs" id="extRightTable">
+                            <thead>
+                                <tr class="text-slate-500 border-b border-slate-700/30">
+                                    <th class="text-left py-1.5 px-2 w-1/4">字段</th>
+                                    <th class="text-left py-1.5 px-2 w-1/6">类型</th>
+                                    <th class="text-left py-1.5 px-2 w-1/3">值</th>
+                                    <th class="text-left py-1.5 px-2 w-1/4 mono">原始报文</th>
+                                </tr>
+                            </thead>
+                            <tbody id="extRightBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <div class="mt-3 p-2 bg-slate-900/50 rounded border border-slate-700">
                 <div class="flex justify-between items-center mb-1">
                     <span class="text-xs text-slate-500">校验验证 (XOR)</span>
@@ -772,7 +805,29 @@
                         push("总包数", "WORD", readU16(data, 30), bytesToHex(data.slice(30, 32)));
                         push("照片数据大小", "DWORD", readU32(data, 32), bytesToHex(data.slice(32, 36)));
                         if (len >= 40) push("课堂ID", "DWORD", readU32(data, 36), bytesToHex(data.slice(36, 40)));
-                        if (len >= 78) push("附加GNSS数据包", "BYTE[38]", '(详见位置基本信息)', bytesToHex(data.slice(40, 78)));
+                        if (len >= 78) {
+                            push("─ 附加GNSS数据包 ─", "", "───────────────");
+                            const gnss = data.slice(40, 78);
+                            push("报警标志", "DWORD", `0x${bytesToHex(gnss.slice(0, 4))}`, bytesToHex(gnss.slice(0, 4)));
+                            push("状态位", "DWORD", `0x${bytesToHex(gnss.slice(4, 8))}`, bytesToHex(gnss.slice(4, 8)));
+                            const lat = (readU32(gnss, 8) / 1000000).toFixed(6);
+                            const lon = (readU32(gnss, 12) / 1000000).toFixed(6);
+                            push("纬度", "DWORD", `${lat}°`, bytesToHex(gnss.slice(8, 12)));
+                            push("经度", "DWORD", `${lon}°`, bytesToHex(gnss.slice(12, 16)));
+                            push("高程", "WORD", `${readU16(gnss, 16)} m`, bytesToHex(gnss.slice(16, 18)));
+                            push("速度", "WORD", `${readU16(gnss, 18)} km/h`, bytesToHex(gnss.slice(18, 20)));
+                            push("方向", "WORD", `${readU16(gnss, 20)}°`, bytesToHex(gnss.slice(20, 22)));
+                            push("GNSS时间", "BCD[6]", parseBCDTime(gnss.slice(22, 28)), bytesToHex(gnss.slice(22, 28)));
+                            if (gnss.length > 28) {
+                                push("里程", "DWORD", `${readU32(gnss, 28) / 10} km`, bytesToHex(gnss.slice(28, 32)));
+                            }
+                            if (gnss.length > 32) {
+                                push("转速", "WORD", `${readU16(gnss, 32)} rpm`, bytesToHex(gnss.slice(32, 34)));
+                            }
+                            if (gnss.length > 34) {
+                                push("附加数据", "BYTE[" + (gnss.length - 34) + "]", bytesToHex(gnss.slice(34)), bytesToHex(gnss.slice(34)));
+                            }
+                        }
                         if (len >= 79) push("人脸识别置信度", "BYTE", `${data[78]} (0-100)`, toHex(data[78], 2));
                     } else {
                         push("原始数据", hx);
@@ -1015,7 +1070,7 @@
             // Helper: build a table row — all values are escaped via textContent-safe strings
             // (field/type/value are protocol-derived constants or numeric conversions, not user input)
             function row(field, type, value, rawBytes) {
-                const hex = Array.from(rawBytes).map(function(b) { return b.toString(16).padStart(2, '0'); }).join(' ');
+                const hex = rawBytes ? Array.from(rawBytes).map(function(b) { return b.toString(16).padStart(2, '0'); }).join(' ') : '';
                 var tr = document.createElement('tr');
                 tr.className = 'border-b border-slate-700/20';
                 var td1 = document.createElement('td'); td1.className = 'py-1.5 px-2 text-slate-300'; td1.textContent = field;
@@ -1066,33 +1121,65 @@
 
             var frag = document.createDocumentFragment();
 
-            // 透传消息
+            // 透传消息 — 计时扩展走双栏，其他透传走单表
+            var extPanel = document.getElementById('extPanel');
+            extPanel.classList.add('hidden');
+            document.getElementById('extLeftBody').innerHTML = '';
+            document.getElementById('extRightBody').innerHTML = '';
+            document.getElementById('bodyParsePanel').classList.remove('hidden');
+
             if (pkt.isPassthrough && pkt.passthrough) {
                 var pt = pkt.passthrough;
-                frag.appendChild(row('透传消息类型', 'BYTE', '0x' + toHex(pt.type, 2) + ' (' + pt.typeName + ')', [pt.type]));
                 if (pt.extension) {
+                    // 计时扩展消息 → 双栏布局
+                    extPanel.classList.remove('hidden');
+                    document.getElementById('bodyParsePanel').classList.add('hidden');
+
+                    // 左栏：透传消息类型
+                    var leftFrag = document.createDocumentFragment();
+                    leftFrag.appendChild(row('透传类型', 'BYTE', '0x' + toHex(pt.type, 2), [pt.type]));
+                    leftFrag.appendChild(row('类型名称', '', pt.typeName));
+                    if (pt.extension.msgId != null) {
+                        leftFrag.appendChild(row('扩展消息ID', 'WORD', '0x' + toHex(pt.extension.msgId, 4)));
+                        leftFrag.appendChild(row('消息名称', '', pt.extension.msgName));
+                    }
+                    document.getElementById('extLeftBody').appendChild(leftFrag);
+
+                    // 右栏：扩展消息头 + 数据
+                    var rightFrag = document.createDocumentFragment();
                     var ext = pt.extension;
                     if (ext.msgId != null) {
-                        frag.appendChild(separator('扩展计时培训消息头 (B.33)'));
-                        frag.appendChild(row('扩展消息ID', 'WORD', '0x' + toHex(ext.msgId, 4) + ' (' + ext.msgName + ')', pt.content.slice(0, 2)));
-                        frag.appendChild(row('扩展属性', 'WORD', '0x' + toHex(ext.msgProps || 0, 4), pt.content.slice(2, 4)));
-                        frag.appendChild(row('驾培包序号', 'WORD', String(ext.serialNo), pt.content.slice(4, 6)));
-                        frag.appendChild(row('计时终端编号', 'BYTE[16]', ext.terminalId, pt.content.slice(6, 22)));
-                        frag.appendChild(row('数据长度', 'DWORD', String(ext.dataLength), pt.content.slice(22, 26)));
+                        rightFrag.appendChild(separator('扩展消息头 (B.33)'));
+                        rightFrag.appendChild(row('扩展消息ID', 'WORD', '0x' + toHex(ext.msgId, 4) + ' (' + ext.msgName + ')', pt.content.slice(0, 2)));
+                        var extProps = ext.msgProps || 0;
+                        var extRealTime = (extProps & 0x01) === 0 ? '实时' : '补传';
+                        var extNeedResp = (extProps & 0x02) !== 0 ? '需应答' : '无需应答';
+                        var extEncAlg = (extProps >> 4) & 0x0F;
+                        var extEncDesc = extEncAlg === 0 ? '未加密' : extEncAlg === 1 ? 'SHA1' : extEncAlg === 2 ? 'SHA256' : '未知(' + extEncAlg + ')';
+                        var extPropsDesc = '0x' + toHex(extProps, 4) + ' [' + extRealTime + ', ' + extNeedResp + ', 加密=' + extEncDesc + ']';
+                        rightFrag.appendChild(row('扩展属性', 'WORD', extPropsDesc, pt.content.slice(2, 4)));
+                        rightFrag.appendChild(row('驾培包序号', 'WORD', String(ext.serialNo), pt.content.slice(4, 6)));
+                        rightFrag.appendChild(row('计时终端编号', 'BYTE[16]', ext.terminalId, pt.content.slice(6, 22)));
+                        rightFrag.appendChild(row('数据长度', 'DWORD', String(ext.dataLength), pt.content.slice(22, 26)));
                     }
                     if (ext.error) {
-                        frag.appendChild(errorRow('⚠ ' + ext.error));
+                        rightFrag.appendChild(errorRow('⚠ ' + ext.error));
                     }
                     if (ext.dataParsed && ext.dataParsed.length) {
-                        frag.appendChild(separator('扩展消息数据'));
+                        rightFrag.appendChild(separator('扩展消息数据'));
                         ext.dataParsed.forEach(function(item) {
-                            frag.appendChild(dataParsedRow(item));
+                            rightFrag.appendChild(dataParsedRow(item));
                         });
                     }
                     if (ext.tail && ext.tail.length) {
-                        frag.appendChild(row('尾部附加', 'BYTE[' + ext.tail.length + ']', ext.tail.length + ' 字节', ext.tail));
+                        rightFrag.appendChild(separator('校验串'));
+                        rightFrag.appendChild(row('校验串', 'BYTE[' + ext.tail.length + ']', ext.tail.length + ' 字节', ext.tail));
                     }
+                    document.getElementById('extRightBody').appendChild(rightFrag);
+                    return;
                 } else {
+                    // 非计时扩展的透传消息
+                    frag.appendChild(row('透传消息类型', 'BYTE', '0x' + toHex(pt.type, 2) + ' (' + pt.typeName + ')', [pt.type]));
                     frag.appendChild(row('透传内容', 'BYTE[' + pt.content.length + ']', pt.content.length + ' 字节', pt.content.slice(0, Math.min(pt.content.length, 32))));
                 }
             }
